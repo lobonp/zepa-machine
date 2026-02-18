@@ -1,7 +1,9 @@
+// Package machine
 package machine
 
 import (
 	"fmt"
+
 	"zepa-machine/core"
 	assembler "zepa-machine/cross-assembler"
 )
@@ -78,6 +80,7 @@ func (m *Machine) d2m(inst Instruction) {
 		m.registers[core.W4] = 0
 	}
 }
+
 func (m *Machine) mv(inst Instruction) {
 	m.registers[inst.rd] = uint32(inst.immediate)
 }
@@ -261,10 +264,9 @@ func (m *Machine) GetRegisters() map[core.Register]uint32 {
 func NewMachine(memoryBytes int) *Machine {
 	// Define exception handler code
 	handlerCode, err := assembler.ConvertInstructionsToBinary([][]string{
-		{"HALT"}, //M + 0 : Default Handler
-		{"RET"},  //M + 4 : Memory Violation Handler
+		{"HALT"}, // M + 0 : Default Handler
+		{"RET"},  // M + 4 : Memory Violation Handler
 	})
-
 	if err != nil {
 		fmt.Printf("%d\n", err)
 	}
