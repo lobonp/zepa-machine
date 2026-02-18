@@ -1,7 +1,9 @@
 package core
 
-type Opcode uint8
-type Register uint8
+type (
+	Opcode   uint8
+	Register uint8
+)
 
 const (
 	// Define registers
@@ -48,5 +50,7 @@ const (
 
 // Exception codes
 const (
-	EXC_MEMORY_VIOLATION = 1
+	EXC_MEMORY_VIOLATION   = 1
+	EXC_UNDEFINED          = 0
+	EXC_SEGMENTATION_FAULT = 2
 )
