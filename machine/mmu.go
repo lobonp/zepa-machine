@@ -2,19 +2,20 @@ package machine
 
 import "fmt"
 
+const (
+	MaxSegmentSizeBits = 12
+	MaxSegmentSize     = 1 << MaxSegmentSizeBits
+	OffsetMask         = MaxSegmentSize - 1
+	SegmentShift       = MaxSegmentSizeBits
+	NumSegments        = 3
+)
+
 type Privilege int
 
 const (
-	Ring0 Privilege = 0 // kernel
-	Ring3 Privilege = 3 // user
+	KernelPrivilege Privilege = iota
+	UserPrivilege
 )
-
-type Segment struct {
-	Base    uint32
-	Priv    Privilege
-	Limit   uint32
-	Present bool
-}
 
 type MMUMode int
 
@@ -26,35 +27,53 @@ const (
 type AccessType int
 
 const (
-	AccessFetch AccessType = iota
-	AccessRead
-	AccessWrite
+	Execute AccessType = 1 << iota
+	Write
+	Read
 )
+
+type Segment struct {
+	Base          uint32
+	Limit         uint32
+	GrowsPositive bool
+	Protection    AccessType
+	Priv          Privilege
+}
 
 type MMU struct {
 	Mode     MMUMode
-	Segments [3]Segment
+	Segments [NumSegments]Segment
 }
 
 func (m *MMU) Translate(virtualAddress uint32) (uint32, error) {
+	var physicalAddress uint32
+	err := fmt.Errorf("SEGMENTATION_FAULT: Falha na tradução")
+
 	if m.Mode == ModeFlat {
-		physicalAddress := virtualAddress
-		return physicalAddress, nil
+		return virtualAddress, nil
 	}
 
-	segmentID := virtualAddress >> 12
-	offset := virtualAddress & 0x0FFF
+	segmentID := virtualAddress >> SegmentShift
+	offset := virtualAddress & OffsetMask
 
 	if segmentID >= uint32(len(m.Segments)) {
-		return 0, fmt.Errorf("SEGMENTATION_FAULT: Invalid Segment")
+		return 0, fmt.Errorf("SEGMENTATION_FAULT: ID %d inválido", segmentID)
 	}
 
-	segment := m.Segments[segmentID]
+	seg := m.Segments[segmentID]
 
-	if offset >= segment.Limit {
-		return 0, fmt.Errorf("SEGMENTATION_FAULT: Out of bounds")
+	if seg.GrowsPositive && offset < seg.Limit {
+		physicalAddress = seg.Base + offset
+		err = nil
 	}
 
-	physicalAddress := segment.Base + offset
-	return physicalAddress, nil
+	if !seg.GrowsPositive {
+		realOffset := int32(offset) - int32(MaxSegmentSize)
+		if uint32(-realOffset) <= seg.Limit {
+			physicalAddress = uint32(int32(seg.Base) + realOffset)
+			err = nil
+		}
+	}
+
+	return physicalAddress, err
 }
