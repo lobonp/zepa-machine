@@ -1,49 +1,60 @@
 package machine
 
+import "fmt"
+
 type Privilege int
 
 const (
-	KernelPrivilege Privilege = iota
-	UserPrivilege
+	Ring0 Privilege = 0 // kernel
+	Ring3 Privilege = 3 // user
 )
 
 type Segment struct {
-	Base     uint32
-	Limit    uint32
-	ReadOnly bool
-	Present  bool
+	Base    uint32
+	Priv    Privilege
+	Limit   uint32
+	Present bool
 }
 
 type MMUMode int
 
 const (
-	DirectMode MMUMode = iota
-	SegmentedMode
+	ModeFlat MMUMode = iota
+	ModeSegmented
 )
 
 type AccessType int
 
 const (
-	AccessRead AccessType = iota
+	AccessFetch AccessType = iota
+	AccessRead
 	AccessWrite
 )
 
 type MMU struct {
 	Mode     MMUMode
-	Segments map[int]Segment
+	Segments [3]Segment
 }
 
-func GetMMU() *MMU {
-	return &MMU{
-		Mode:     DirectMode,
-		Segments: make(map[int]Segment),
+func (m *MMU) Translate(virtualAddress uint32) (uint32, error) {
+	if m.Mode == ModeFlat {
+		physicalAddress := virtualAddress
+		return physicalAddress, nil
 	}
-}
 
-func (m *MMU) Translate(segID int, virtualAddress, acc AccessType) (uint32, error) {
-	if m.Mode == DirectMode {
-		return uint32(virtualAddress), nil
+	segmentID := virtualAddress >> 12
+	offset := virtualAddress & 0x0FFF
+
+	if segmentID >= uint32(len(m.Segments)) {
+		return 0, fmt.Errorf("SEGMENTATION_FAULT: Invalid Segment")
 	}
-	// ainda não implementado
-	return uint32(0), nil
+
+	segment := m.Segments[segmentID]
+
+	if offset >= segment.Limit {
+		return 0, fmt.Errorf("SEGMENTATION_FAULT: Out of bounds")
+	}
+
+	physicalAddress := segment.Base + offset
+	return physicalAddress, nil
 }
