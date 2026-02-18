@@ -7,7 +7,7 @@ const (
 	MaxSegmentSize     = 1 << MaxSegmentSizeBits
 	OffsetMask         = MaxSegmentSize - 1
 	SegmentShift       = MaxSegmentSizeBits
-	NumSegments        = 3
+	NumSegments        = 4
 )
 
 type Privilege int
@@ -45,7 +45,7 @@ type MMU struct {
 	Segments [NumSegments]Segment
 }
 
-func (m *MMU) Translate(virtualAddress uint32) (uint32, error) {
+func (m *MMU) Translate(virtualAddress uint32, access AccessType, currentPriv Privilege) (uint32, error) {
 	var physicalAddress uint32
 	err := fmt.Errorf("SEGMENTATION_FAULT: Falha na tradução")
 
@@ -61,6 +61,15 @@ func (m *MMU) Translate(virtualAddress uint32) (uint32, error) {
 	}
 
 	seg := m.Segments[segmentID]
+
+	if currentPriv > seg.Priv {
+		return 0, fmt.Errorf("SEGMENTATION_FAULT: Privilege violation")
+	}
+
+	if seg.Protection&access == 0 {
+		err = fmt.Errorf("SEGMENTATION_FAULT: Forbidden")
+		return 0, err
+	}
 
 	if seg.GrowsPositive && offset < seg.Limit {
 		physicalAddress = seg.Base + offset
