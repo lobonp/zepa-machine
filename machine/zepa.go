@@ -1,9 +1,8 @@
-// Package machine
+// Package machines
 package machine
 
 import (
 	"fmt"
-
 	"zepa-machine/core"
 	assembler "zepa-machine/cross-assembler"
 )
@@ -58,6 +57,8 @@ type Machine struct {
 	evt       map[uint32]byte
 	disk      Disk
 	halted    bool
+	mmu       *MMU
+	privMode  Privilege
 }
 
 func (m *Machine) InitDisk() {
@@ -126,30 +127,45 @@ func (m *Machine) bgt(inst Instruction) {
 }
 
 func (m *Machine) load(inst Instruction) {
-	// Verify invalid address
-	if int(inst.immediate) >= len(m.memory) {
+	addr := uint32(inst.immediate)
+	physical, err := m.translate(addr, Read, m.privMode)
+	if err != nil {
+		m.exception(core.EXC_SEGMENTATION_FAULT)
+		return
+	}
+	if int(physical) >= len(m.memory) {
 		m.exception(core.EXC_MEMORY_VIOLATION)
 		return
 	}
 
-	m.registers[inst.rd] = uint32(m.memory[inst.immediate])
+	m.registers[inst.rd] = uint32(m.memory[physical])
 }
 
 func (m *Machine) store(inst Instruction) {
-	// Verify invalid address
-	if int(inst.immediate) >= len(m.memory) {
+	addr := uint32(inst.immediate)
+	physical, err := m.translate(addr, Write, m.privMode)
+	if err != nil {
+		m.exception(core.EXC_SEGMENTATION_FAULT)
+		return
+	}
+	if int(physical) >= len(m.memory) {
 		m.exception(core.EXC_MEMORY_VIOLATION)
 		return
 	}
 
-	m.memory[inst.immediate] = byte(m.registers[inst.rd])
+	m.memory[physical] = byte(m.registers[inst.rd])
 }
 
 func (m *Machine) fetch() {
 	var completeInstruction uint32 = 0
 	for i := 0; i < 4; i++ {
 		currentInstructionAddress := m.registers[core.PC]
-		currentInstruction := m.memory[currentInstructionAddress]
+		physical, err := m.translate(currentInstructionAddress, Execute, m.privMode)
+		if err != nil {
+			m.exception(core.EXC_SEGMENTATION_FAULT)
+			return
+		}
+		currentInstruction := m.memory[physical]
 		completeInstruction = completeInstruction | uint32(currentInstruction)<<(24-8*i)
 		m.registers[core.PC] += 1
 	}
@@ -266,6 +282,7 @@ func NewMachine(memoryBytes int) *Machine {
 	handlerCode, err := assembler.ConvertInstructionsToBinary([][]string{
 		{"HALT"}, // M + 0 : Default Handler
 		{"RET"},  // M + 4 : Memory Violation Handler
+		{"RET"},  // M + 8 : Segmentation Fault Handler
 	})
 	if err != nil {
 		fmt.Printf("%d\n", err)
@@ -282,12 +299,23 @@ func NewMachine(memoryBytes int) *Machine {
 		registers: make(map[core.Register]uint32),
 		evt:       make(map[uint32]byte),
 		disk:      Disk{programs: make([][]byte, 0)},
+		mmu: &MMU{
+			Mode: ModeSegmented,
+			Segments: [NumSegments]Segment{
+				{Base: 0, Limit: 2048, GrowsPositive: true, Protection: Read | Execute, Priv: KernelPrivilege},  // Code
+				{Base: 2048, Limit: 2048, GrowsPositive: true, Protection: Read | Write, Priv: UserPrivilege},   // Heap
+				{Base: 4096, Limit: 2048, GrowsPositive: false, Protection: Read | Write, Priv: UserPrivilege},  // Stack (downward)
+				{Base: 6144, Limit: 2048, GrowsPositive: true, Protection: Read | Write, Priv: KernelPrivilege}, // OS/Reserved
+			},
+		},
+		privMode: KernelPrivilege, // Inicia em kernel mode
 	}
 
 	handlerAddress := uint32(machineMemory - exceptionHandlerSize) // Set handler address
 
 	machine.evt[0] = byte(memoryBytes)                             // Default handler location
 	machine.evt[core.EXC_MEMORY_VIOLATION] = byte(memoryBytes + 4) // Set memory violation handler location
+	machine.evt[core.EXC_SEGMENTATION_FAULT] = byte(memoryBytes + 8)
 
 	// Load exception handler to memory
 	copy(machine.memory[handlerAddress:], handlerCode)
@@ -338,4 +366,8 @@ func (m *Machine) ret(inst Instruction) {
 
 func (m *Machine) udf(inst Instruction) {
 	m.exception(0)
+}
+
+func (m *Machine) translate(va uint32, access AccessType, priv Privilege) (uint32, error) {
+	return m.mmu.Translate(va, access, priv)
 }
