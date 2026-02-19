@@ -50,7 +50,9 @@ const (
 
 // Exception codes
 const (
-	EXC_MEMORY_VIOLATION   = 1
 	EXC_UNDEFINED          = 0
+	EXC_MEMORY_VIOLATION   = 1
 	EXC_SEGMENTATION_FAULT = 2
+	EXC_PAGE_FAULT         = 3
+	EXC_PROTECTION_FAULT   = 4
 )
