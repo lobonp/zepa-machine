@@ -48,5 +48,7 @@ const (
 
 // Exception codes
 const (
-	EXC_MEMORY_VIOLATION = 1
+	EXC_SEGMENT_FAULT    = 1
+	EXC_PAGE_FAULT       = 2
+	EXC_PROTECTION_FAULT = 3
 )
