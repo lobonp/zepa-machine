@@ -6,6 +6,14 @@ ZEPA is a simulated machine designed to help you learn aspects of computer organ
 
 Read the [ISA](specs/ISA) and [assembly](specs/assembly) specifications for detailed information about the instruction set architecture and assembly language.
 
+## Exceptions (Hybrid MMU)
+
+Memory access faults are now classified by type:
+
+- `EXC_SEGMENT_FAULT` (`1`): Address is outside physical memory.
+- `EXC_PAGE_FAULT` (`2`): Address points to an unmapped page.
+- `EXC_PROTECTION_FAULT` (`3`): Address points to protected memory (for example, privileged exception-handler area) or violates page protection.
+
 ## Running the Machine
 
 Usage: `go run ./main.go <program1.asm> [program2.asm...]`
