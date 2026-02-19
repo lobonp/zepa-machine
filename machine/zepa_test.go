@@ -3,22 +3,21 @@ package machine
 import (
 	"bytes"
 	"os"
+	"strings"
 	"testing"
 	"zepa-machine/core"
 )
 
-// To-do: refact to avoid duplicate code
-
 func TestFetch(t *testing.T) {
-
 	machine := NewMachine(2048)
-	machine.memory[0] = 0b00110100
+	machine.mmu.Mode = ModeFlat
+	machine.memory[0] = 0b00111100
 	machine.memory[1] = 0b01000011
 	machine.memory[2] = 0b00001000
 	machine.memory[3] = 0b00000000
 	machine.fetch()
 
-	expectedInstruction := uint32(0b00110100010000110000100000000000)
+	expectedInstruction := uint32(0b00111100010000110000100000000000)
 	if machine.registers[core.IR] != expectedInstruction {
 		t.Errorf("Expected 0b%032b, but got 0b%032b", expectedInstruction, machine.registers[core.IR])
 	}
@@ -30,7 +29,8 @@ func TestFetch(t *testing.T) {
 
 func TestDecode(t *testing.T) {
 	machine := NewMachine(2048)
-	machine.memory[0] = 0b00110100
+	machine.mmu.Mode = ModeFlat // Desabilitar MMU para teste de decodificação
+	machine.memory[0] = 0b00111100
 	machine.memory[1] = 0b01000011
 	machine.memory[2] = 0b00001000
 	machine.memory[3] = 0b00000000
@@ -101,7 +101,8 @@ func TestJUMP(t *testing.T) {
 
 func TestLOAD(t *testing.T) {
 	machine := NewMachine(2048)
-	machine.memory[256] = 42 // Definindo um valor na memória para ser carregado
+	machine.mmu.Mode = ModeFlat
+	machine.memory[256] = 42
 	inst := Instruction{opcode: (*Machine).load, rd: core.W1, immediate: 256}
 	machine.execute(inst)
 
@@ -112,6 +113,7 @@ func TestLOAD(t *testing.T) {
 
 func TestSTORE(t *testing.T) {
 	machine := NewMachine(2048)
+	machine.mmu.Mode = ModeFlat
 	machine.registers[core.W1] = 65
 	inst := Instruction{opcode: (*Machine).store, rd: core.W1, immediate: 100}
 	machine.execute(inst)
@@ -126,7 +128,6 @@ func TestBEQ(t *testing.T) {
 	cmpInst := Instruction{opcode: (*Machine).cmp, rs1: core.W0, rs2: core.W1}
 	inst := Instruction{opcode: (*Machine).beq, immediate: 0xA}
 
-	// Equals
 	machine.execute(cmpInst)
 	machine.execute(inst)
 
@@ -134,7 +135,6 @@ func TestBEQ(t *testing.T) {
 		t.Errorf("Expected pc to be 10, got %d", machine.registers[core.PC])
 	}
 
-	// Greater
 	machine.registers[core.PC] = 0
 	machine.registers[core.W0] = 1
 
@@ -145,7 +145,6 @@ func TestBEQ(t *testing.T) {
 		t.Errorf("Expected pc to be 0, got %d", machine.registers[core.PC])
 	}
 
-	// Lower
 	machine.registers[core.PC] = 0
 	machine.registers[core.W1] = 0
 
@@ -163,7 +162,6 @@ func TestBLT(t *testing.T) {
 	cmpInst := Instruction{opcode: (*Machine).cmp, rs1: core.W0, rs2: core.W1}
 	inst := Instruction{opcode: (*Machine).blt, immediate: 0xA}
 
-	// Lower
 	machine.execute(cmpInst)
 	machine.execute(inst)
 
@@ -171,7 +169,6 @@ func TestBLT(t *testing.T) {
 		t.Errorf("Expected pc to be 10, got %d", machine.registers[core.PC])
 	}
 
-	// Equals
 	machine.registers[core.PC] = 0
 	machine.registers[core.W0] = 1
 
@@ -182,7 +179,6 @@ func TestBLT(t *testing.T) {
 		t.Errorf("Expected pc to be 0, got %d", machine.registers[core.PC])
 	}
 
-	// Greater
 	machine.registers[core.PC] = 0
 	machine.registers[core.W0] = 1
 	machine.registers[core.W1] = 0
@@ -201,7 +197,6 @@ func TestBGT(t *testing.T) {
 	cmpInst := Instruction{opcode: (*Machine).cmp, rs1: core.W0, rs2: core.W1}
 	inst := Instruction{opcode: (*Machine).bgt, immediate: 0xA}
 
-	// Greater
 	machine.execute(cmpInst)
 	machine.execute(inst)
 
@@ -209,7 +204,6 @@ func TestBGT(t *testing.T) {
 		t.Errorf("Expected pc to be 10, got %d", machine.registers[core.PC])
 	}
 
-	// Equals
 	machine.registers[core.PC] = 0
 	machine.registers[core.W0] = 0
 
@@ -220,7 +214,6 @@ func TestBGT(t *testing.T) {
 		t.Errorf("Expected pc to be 0, got %d", machine.registers[core.PC])
 	}
 
-	// Lower
 	machine.registers[core.PC] = 0
 	machine.registers[core.W0] = 0
 	machine.registers[core.W1] = 1
@@ -232,6 +225,7 @@ func TestBGT(t *testing.T) {
 		t.Errorf("Expected pc to be 0, got %d", machine.registers[core.PC])
 	}
 }
+
 func TestRET(t *testing.T) {
 	machine := NewMachine(2048)
 	inst := Instruction{opcode: (*Machine).ret}
@@ -247,8 +241,7 @@ func TestUndefinedException(t *testing.T) {
 	machine := NewMachine(2048)
 	inst := Instruction{opcode: (*Machine).udf}
 
-	// Get default exit
-	old := os.Stdout // Save stdout
+	old := os.Stdout
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
@@ -272,8 +265,7 @@ func TestMemoryViolationException(t *testing.T) {
 	machine := NewMachine(2048)
 	inst := Instruction{opcode: (*Machine).load, immediate: 0xFFF}
 
-	// Get default exit
-	old := os.Stdout // Save stdout
+	old := os.Stdout
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
@@ -286,9 +278,59 @@ func TestMemoryViolationException(t *testing.T) {
 	_, _ = buf.ReadFrom(r)
 	got := buf.String()
 
-	expected := "Exception raised: Code 1\n"
+	expected := "Exception raised: Code 2\n"
 
 	if got != expected {
 		t.Errorf("Expected: %s, got %s", expected, got)
+	}
+}
+
+func TestTranslateValid(t *testing.T) {
+	machine := NewMachine(2048)
+	pa, err := machine.translate(100, Read, KernelPrivilege)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+	if pa != 100 {
+		t.Errorf("Expected PA 100, got %d", pa)
+	}
+}
+
+func TestTranslateInvalidLimit(t *testing.T) {
+	machine := NewMachine(2048)
+	machine.mmu.Mode = ModeSegmented
+	_, err := machine.translate(3000, Read, KernelPrivilege)
+	if err == nil {
+		t.Error("Expected error for limit violation")
+	}
+}
+
+func TestFetchWithMMU(t *testing.T) {
+	machine := NewMachine(2048)
+	machine.mmu.Mode = ModeSegmented
+	machine.memory[0] = 0b00110100
+	machine.fetch()
+}
+
+func TestLoadWithSegmentationFault(t *testing.T) {
+	machine := NewMachine(2048)
+	machine.mmu.Mode = ModeSegmented
+	inst := Instruction{opcode: (*Machine).load, rd: core.W1, immediate: 3000}
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	machine.execute(inst)
+
+	w.Close()
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+	got := buf.String()
+
+	if !strings.Contains(got, "Exception raised") {
+		t.Errorf("Expected segmentation fault, got %s", got)
 	}
 }
