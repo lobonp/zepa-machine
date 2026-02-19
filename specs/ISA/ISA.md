@@ -146,6 +146,15 @@ These flags can be used by instructions to make decisions that can change the pr
 - **Format**: I-Type
 - **Opcode (decimal)**: 27
 
+### Exception Codes
+
+The processor uses exception codes to index the Exception Vector Table (EVT) and route control to the proper handler.
+
+- **0**: Default exception (used by `UDF`)
+- **1 (`EXC_SEGMENT_FAULT`)**: Address is outside physical memory bounds
+- **2 (`EXC_PAGE_FAULT`)**: Access targets an unmapped virtual page
+- **3 (`EXC_PROTECTION_FAULT`)**: Access targets privileged/protected memory or violates page protection rules
+
 ### Load and Store Operations with Addresses
 **LOAD**:
 - **Description**: Loads the content stored at a specific memory address into a specific register.
