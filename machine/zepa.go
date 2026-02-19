@@ -51,11 +51,15 @@ type Disk struct {
 }
 
 type Machine struct {
-	memory    []byte
-	registers map[core.Register]uint32
-	evt       map[uint32]byte
-	disk      Disk
-	halted    bool
+	memory             []byte
+	registers          map[core.Register]uint32
+	evt                map[uint32]uint32
+	disk               Disk
+	halted             bool
+	userMemoryLimit    uint32
+	pageSize           uint32
+	unmappedPages      map[uint32]bool
+	writeProtectedPage map[uint32]bool
 }
 
 func (m *Machine) InitDisk() {
@@ -124,8 +128,8 @@ func (m *Machine) bgt(inst Instruction) {
 
 func (m *Machine) load(inst Instruction) {
 	// Verify invalid address
-	if int(inst.immediate) >= len(m.memory) {
-		m.exception(core.EXC_MEMORY_VIOLATION)
+	if code, hasFault := m.memoryAccessFault(inst.immediate, false); hasFault {
+		m.exception(code)
 		return
 	}
 
@@ -134,12 +138,43 @@ func (m *Machine) load(inst Instruction) {
 
 func (m *Machine) store(inst Instruction) {
 	// Verify invalid address
-	if int(inst.immediate) >= len(m.memory) {
-		m.exception(core.EXC_MEMORY_VIOLATION)
+	if code, hasFault := m.memoryAccessFault(inst.immediate, true); hasFault {
+		m.exception(code)
 		return
 	}
 
 	m.memory[inst.immediate] = byte(m.registers[inst.rd])
+}
+
+func (m *Machine) memoryAccessFault(address uint16, isWrite bool) (uint32, bool) {
+	addr := uint32(address)
+	if addr >= uint32(len(m.memory)) {
+		return core.EXC_SEGMENT_FAULT, true
+	}
+
+	// Keep exception handlers and register backup area as privileged memory.
+	if addr >= m.userMemoryLimit {
+		return core.EXC_PROTECTION_FAULT, true
+	}
+
+	page := addr / m.pageSize
+	if m.unmappedPages[page] {
+		return core.EXC_PAGE_FAULT, true
+	}
+
+	if isWrite && m.writeProtectedPage[page] {
+		return core.EXC_PROTECTION_FAULT, true
+	}
+
+	return 0, false
+}
+
+func (m *Machine) setPageMapped(page uint32, mapped bool) {
+	m.unmappedPages[page] = !mapped
+}
+
+func (m *Machine) setPageWriteProtected(page uint32, protected bool) {
+	m.writeProtectedPage[page] = protected
 }
 
 func (m *Machine) fetch() {
@@ -276,16 +311,22 @@ func NewMachine(memoryBytes int) *Machine {
 
 	// Define the machine
 	machine := &Machine{
-		memory:    make([]byte, machineMemory),
-		registers: make(map[core.Register]uint32),
-		evt:       make(map[uint32]byte),
-		disk:      Disk{programs: make([][]byte, 0)},
+		memory:             make([]byte, machineMemory),
+		registers:          make(map[core.Register]uint32),
+		evt:                make(map[uint32]uint32),
+		disk:               Disk{programs: make([][]byte, 0)},
+		userMemoryLimit:    uint32(memoryBytes),
+		pageSize:           256,
+		unmappedPages:      make(map[uint32]bool),
+		writeProtectedPage: make(map[uint32]bool),
 	}
 
-	handlerAddress := uint32(machineMemory - exceptionHandlerSize) // Set handler address
+	handlerAddress := uint32(machineMemory - exceptionHandlerSize)   // Set handler address
 
-	machine.evt[0] = byte(memoryBytes)                             // Default handler location
-	machine.evt[core.EXC_MEMORY_VIOLATION] = byte(memoryBytes + 4) // Set memory violation handler location
+	machine.evt[0] = uint32(memoryBytes)                             // Default handler location
+	machine.evt[core.EXC_SEGMENT_FAULT] = uint32(memoryBytes + 4)    // Set memory violation handler location
+	machine.evt[core.EXC_PAGE_FAULT] = uint32(memoryBytes + 4)       // Set memory violation handler location
+	machine.evt[core.EXC_PROTECTION_FAULT] = uint32(memoryBytes + 4) // Set memory violation handler location
 
 	// Load exception handler to memory
 	copy(machine.memory[handlerAddress:], handlerCode)
@@ -309,7 +350,7 @@ func (m *Machine) exception(code uint32) {
 	m.registers[core.SSR] = m.registers[core.SR] // Save Status
 
 	// Redirect to exception Handler
-	m.registers[core.PC] = uint32(m.evt[code])
+	m.registers[core.PC] = m.evt[code]
 }
 
 func (m *Machine) halt(inst Instruction) {
