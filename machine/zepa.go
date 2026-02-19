@@ -2,6 +2,7 @@
 package machine
 
 import (
+	"errors"
 	"fmt"
 	"zepa-machine/core"
 	assembler "zepa-machine/cross-assembler"
@@ -52,13 +53,17 @@ type Disk struct {
 }
 
 type Machine struct {
-	memory    []byte
-	registers map[core.Register]uint32
-	evt       map[uint32]byte
-	disk      Disk
-	halted    bool
-	mmu       *MMU
-	privMode  Privilege
+	memory             []byte
+	registers          map[core.Register]uint32
+	evt                map[uint32]uint32
+	disk               Disk
+	halted             bool
+	mmu                *MMU
+	privMode           Privilege
+	userMemoryLimit    uint32
+	pageSize           uint32
+	unmappedPages      map[uint32]bool
+	writeProtectedPage map[uint32]bool
 }
 
 func (m *Machine) InitDisk() {
@@ -129,12 +134,11 @@ func (m *Machine) bgt(inst Instruction) {
 func (m *Machine) load(inst Instruction) {
 	addr := uint32(inst.immediate)
 	physical, err := m.translate(addr, Read, m.privMode)
-	if err != nil {
-		m.exception(core.EXC_SEGMENTATION_FAULT)
+	if m.handleFault(err) {
 		return
 	}
-	if int(physical) >= len(m.memory) {
-		m.exception(core.EXC_MEMORY_VIOLATION)
+
+	if m.handleFault(m.memoryAccessFault(physical, false)) {
 		return
 	}
 
@@ -144,29 +148,77 @@ func (m *Machine) load(inst Instruction) {
 func (m *Machine) store(inst Instruction) {
 	addr := uint32(inst.immediate)
 	physical, err := m.translate(addr, Write, m.privMode)
-	if err != nil {
-		m.exception(core.EXC_SEGMENTATION_FAULT)
+	if m.handleFault(err) {
 		return
 	}
-	if int(physical) >= len(m.memory) {
-		m.exception(core.EXC_MEMORY_VIOLATION)
+
+	if m.handleFault(m.memoryAccessFault(physical, true)) {
 		return
 	}
 
 	m.memory[physical] = byte(m.registers[inst.rd])
 }
 
+func (m *Machine) handleFault(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var fault *core.FaultError
+	if errors.As(err, &fault) && fault != nil {
+		m.exception(fault.Code)
+		return true
+	}
+
+	m.exception(core.EXC_UNDEFINED)
+	return true
+}
+
+func (m *Machine) memoryAccessFault(addr uint32, isWrite bool) error {
+	if addr >= uint32(len(m.memory)) {
+		return &core.FaultError{Code: core.EXC_MEMORY_VIOLATION, Msg: "MEMORY_VIOLATION: ADDRESS OUT OF RANGE"}
+	}
+
+	// Keep exception handlers and register backup area as privileged memory.
+	if addr >= m.userMemoryLimit {
+		return &core.FaultError{Code: core.EXC_PROTECTION_FAULT, Msg: "PROTECTION_FAULT: PRIVILEGED MEMORY"}
+	}
+
+	page := addr / m.pageSize
+	if m.unmappedPages[page] {
+		return &core.FaultError{Code: core.EXC_PAGE_FAULT, Msg: "PAGE_FAULT: UNMAPPED PAGE"}
+	}
+
+	if isWrite && m.writeProtectedPage[page] {
+		return &core.FaultError{Code: core.EXC_PROTECTION_FAULT, Msg: "PROTECTION_FAULT: WRITE-PROTECTED PAGE"}
+	}
+
+	return nil
+}
+
+func (m *Machine) setPageMapped(page uint32, mapped bool) {
+	m.unmappedPages[page] = !mapped
+}
+
+func (m *Machine) setPageWriteProtected(page uint32, protected bool) {
+	m.writeProtectedPage[page] = protected
+}
+
 func (m *Machine) fetch() {
-	var completeInstruction uint32 = 0
+	var completeInstruction uint32
 	for i := 0; i < 4; i++ {
 		currentInstructionAddress := m.registers[core.PC]
 		physical, err := m.translate(currentInstructionAddress, Execute, m.privMode)
-		if err != nil {
-			m.exception(core.EXC_SEGMENTATION_FAULT)
+		if m.handleFault(err) {
 			return
 		}
+
+		if m.handleFault(m.memoryAccessFault(physical, false)) {
+			return
+		}
+
 		currentInstruction := m.memory[physical]
-		completeInstruction = completeInstruction | uint32(currentInstruction)<<(24-8*i)
+		completeInstruction |= uint32(currentInstruction) << (24 - 8*i)
 		m.registers[core.PC] += 1
 	}
 	m.registers[core.IR] = completeInstruction
@@ -180,12 +232,12 @@ func (m *Machine) decodeRTypeInst(instruction uint32) Instruction {
 	offSetFunct5 := offSetRs2 - funct5Length
 	offSetFunct6 := offSetFunct5 - funct6Length
 
-	opcode := instruction >> (uint32(offsetOpcode)) & core.OpCodeBitMask
+	opcode := instruction >> uint32(offsetOpcode) & core.OpCodeBitMask
 	rd := (instruction >> uint32(offSetRd)) & core.RegisterBitMask
-	rs1 := (instruction >> (uint32(offSetRs1))) & core.RegisterBitMask
-	rs2 := (instruction >> (uint32(offSetRs2))) & core.RegisterBitMask
-	funct5 := (instruction >> (uint32(offSetFunct5))) & core.Funct5BitMask
-	funct6 := (instruction >> (uint32(offSetFunct6))) & core.Funct6BitMask
+	rs1 := (instruction >> uint32(offSetRs1)) & core.RegisterBitMask
+	rs2 := (instruction >> uint32(offSetRs2)) & core.RegisterBitMask
+	funct5 := (instruction >> uint32(offSetFunct5)) & core.Funct5BitMask
+	funct6 := (instruction >> uint32(offSetFunct6)) & core.Funct6BitMask
 
 	operation := operations[byte(opcode)]
 
@@ -205,10 +257,10 @@ func (m *Machine) decodeITypeInst(instruction uint32) Instruction {
 	offSetImmediate := offSetRdRs1 - immediateLen
 	offSetFunct5 := offSetImmediate - funct5Length
 
-	opcode := instruction >> (uint32(offsetOpcode)) & core.OpCodeBitMask
+	opcode := instruction >> uint32(offsetOpcode) & core.OpCodeBitMask
 	rdRs1 := (instruction >> uint32(offSetRdRs1)) & core.RegisterBitMask
-	immediate := (instruction >> (uint32(offSetImmediate))) & core.ImmediateBitMask
-	funct5 := (instruction >> (uint32(offSetFunct5))) & core.Funct5BitMask
+	immediate := (instruction >> uint32(offSetImmediate)) & core.ImmediateBitMask
+	funct5 := (instruction >> uint32(offSetFunct5)) & core.Funct5BitMask
 
 	operation := operations[byte(opcode)]
 
@@ -221,7 +273,7 @@ func (m *Machine) decodeITypeInst(instruction uint32) Instruction {
 }
 
 func (m *Machine) isEndOfProgram() bool {
-	if (m.registers[core.IR]) == 0 {
+	if m.registers[core.IR] == 0 {
 		m.registers[core.PC] -= 4
 		return true
 	}
@@ -230,7 +282,7 @@ func (m *Machine) isEndOfProgram() bool {
 
 func (m *Machine) getOpcode(instruction uint32) core.Opcode {
 	offsetOpcode := word - opcodeLength
-	opcode := instruction >> (uint32(offsetOpcode))
+	opcode := instruction >> uint32(offsetOpcode)
 
 	return core.Opcode(opcode)
 }
@@ -285,7 +337,7 @@ func NewMachine(memoryBytes int) *Machine {
 		{"RET"},  // M + 8 : Segmentation Fault Handler
 	})
 	if err != nil {
-		fmt.Printf("%d\n", err)
+		fmt.Printf("%v\n", err)
 	}
 
 	// Setting space to exception handler and W registers backup
@@ -295,27 +347,25 @@ func NewMachine(memoryBytes int) *Machine {
 
 	// Define the machine
 	machine := &Machine{
-		memory:    make([]byte, machineMemory),
-		registers: make(map[core.Register]uint32),
-		evt:       make(map[uint32]byte),
-		disk:      Disk{programs: make([][]byte, 0)},
-		mmu: &MMU{
-			Mode: ModeSegmented,
-			Segments: [NumSegments]Segment{
-				{Base: 0, Limit: 2048, GrowsPositive: true, Protection: Read | Execute, Priv: KernelPrivilege},  // Code
-				{Base: 2048, Limit: 2048, GrowsPositive: true, Protection: Read | Write, Priv: UserPrivilege},   // Heap
-				{Base: 4096, Limit: 2048, GrowsPositive: false, Protection: Read | Write, Priv: UserPrivilege},  // Stack (downward)
-				{Base: 6144, Limit: 2048, GrowsPositive: true, Protection: Read | Write, Priv: KernelPrivilege}, // OS/Reserved
-			},
-		},
-		privMode: KernelPrivilege, // Inicia em kernel mode
+		memory:             make([]byte, machineMemory),
+		registers:          make(map[core.Register]uint32),
+		evt:                make(map[uint32]uint32),
+		disk:               Disk{programs: make([][]byte, 0)},
+		mmu:                &MMU{Mode: ModeSegmented, Segments: [NumSegments]Segment{{Base: 0, Limit: 2048, GrowsPositive: true, Protection: Read | Execute, Priv: KernelPrivilege}, {Base: 2048, Limit: 2048, GrowsPositive: true, Protection: Read | Write, Priv: UserPrivilege}, {Base: 4096, Limit: 2048, GrowsPositive: false, Protection: Read | Write, Priv: UserPrivilege}, {Base: 6144, Limit: 2048, GrowsPositive: true, Protection: Read | Write, Priv: KernelPrivilege}}},
+		privMode:           KernelPrivilege,
+		userMemoryLimit:    uint32(memoryBytes),
+		pageSize:           256,
+		unmappedPages:      make(map[uint32]bool),
+		writeProtectedPage: make(map[uint32]bool),
 	}
 
 	handlerAddress := uint32(machineMemory - exceptionHandlerSize) // Set handler address
 
-	machine.evt[0] = byte(memoryBytes)                             // Default handler location
-	machine.evt[core.EXC_MEMORY_VIOLATION] = byte(memoryBytes + 4) // Set memory violation handler location
-	machine.evt[core.EXC_SEGMENTATION_FAULT] = byte(memoryBytes + 8)
+	machine.evt[core.EXC_UNDEFINED] = uint32(memoryBytes)
+	machine.evt[core.EXC_MEMORY_VIOLATION] = uint32(memoryBytes + 4)
+	machine.evt[core.EXC_SEGMENTATION_FAULT] = uint32(memoryBytes + 8)
+	machine.evt[core.EXC_PAGE_FAULT] = uint32(memoryBytes + 4)
+	machine.evt[core.EXC_PROTECTION_FAULT] = uint32(memoryBytes + 4)
 
 	// Load exception handler to memory
 	copy(machine.memory[handlerAddress:], handlerCode)
@@ -335,11 +385,11 @@ func (m *Machine) exception(code uint32) {
 	m.memory[len(m.memory)-1] = byte(m.registers[core.W5])
 
 	// Save information
-	m.registers[core.LR] = m.registers[core.PC]  // Save instruction
-	m.registers[core.SSR] = m.registers[core.SR] // Save Status
+	m.registers[core.LR] = m.registers[core.PC]
+	m.registers[core.SSR] = m.registers[core.SR]
 
 	// Redirect to exception Handler
-	m.registers[core.PC] = uint32(m.evt[code])
+	m.registers[core.PC] = m.evt[code]
 }
 
 func (m *Machine) halt(inst Instruction) {
@@ -349,8 +399,8 @@ func (m *Machine) halt(inst Instruction) {
 
 func (m *Machine) ret(inst Instruction) {
 	// Restore values
-	m.registers[core.PC] = m.registers[core.LR]  // Restore PC (value before procedure) and go to next instruction
-	m.registers[core.SSR] = m.registers[core.SR] // Restore status (value before procedure)
+	m.registers[core.PC] = m.registers[core.LR]
+	m.registers[core.SSR] = m.registers[core.SR]
 
 	// Restore W registers
 	m.registers[core.W0] = uint32(m.memory[len(m.memory)-6])
@@ -365,7 +415,7 @@ func (m *Machine) ret(inst Instruction) {
 }
 
 func (m *Machine) udf(inst Instruction) {
-	m.exception(0)
+	m.exception(core.EXC_UNDEFINED)
 }
 
 func (m *Machine) translate(va uint32, access AccessType, priv Privilege) (uint32, error) {
