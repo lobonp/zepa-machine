@@ -3,7 +3,6 @@ package machine
 import (
 	"bytes"
 	"os"
-	"strings"
 	"testing"
 	"zepa-machine/core"
 )
@@ -261,9 +260,9 @@ func TestUndefinedException(t *testing.T) {
 	}
 }
 
-func TestMemoryViolationException(t *testing.T) {
+func TestSegmentFaultException(t *testing.T) {
 	machine := NewMachine(2048)
-	inst := Instruction{opcode: (*Machine).load, immediate: 0xFFF}
+	inst := Instruction{opcode: (*Machine).load, immediate: 0xFFFF}
 
 	old := os.Stdout
 	r, w, _ := os.Pipe()
@@ -327,10 +326,64 @@ func TestLoadWithSegmentationFault(t *testing.T) {
 	os.Stdout = old
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	got := buf.String()
 
-	if !strings.Contains(got, "Exception raised") {
-		t.Errorf("Expected segmentation fault, got %s", got)
+	expected := "Exception raised: Code 2\n"
+
+	if got != expected {
+		t.Errorf("Expected: %s, got %s", expected, got)
+	}
+}
+
+func TestPageFaultException(t *testing.T) {
+	machine := NewMachine(2048)
+	machine.setPageMapped(1, false)
+	inst := Instruction{opcode: (*Machine).load, immediate: 0x100}
+
+	// Get default exit
+	old := os.Stdout // Save stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	machine.execute(inst)
+
+	w.Close()
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+	got := buf.String()
+
+	expected := "Exception raised: Code 3\n"
+
+	if got != expected {
+		t.Errorf("Expected: %s, got %s", expected, got)
+	}
+}
+
+func TestProtectionFaultException(t *testing.T) {
+	machine := NewMachine(2048)
+	machine.registers[core.W1] = 99
+	inst := Instruction{opcode: (*Machine).store, rd: core.W1, immediate: 2048}
+
+	// Get default exit
+	old := os.Stdout // Save stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	machine.execute(inst)
+
+	w.Close()
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+	got := buf.String()
+
+	expected := "Exception raised: Code 4\n"
+
+	if got != expected {
+		t.Errorf("Expected: %s, got %s", expected, got)
 	}
 }
