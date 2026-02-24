@@ -347,12 +347,20 @@ func NewMachine(memoryBytes int) *Machine {
 
 	// Define the machine
 	machine := &Machine{
-		memory:             make([]byte, machineMemory),
-		registers:          make(map[core.Register]uint32),
-		evt:                make(map[uint32]uint32),
-		disk:               Disk{programs: make([][]byte, 0)},
-		mmu:                &MMU{Mode: ModeSegmented, Segments: [NumSegments]Segment{{Base: 0, Limit: 2048, GrowsPositive: true, Protection: Read | Execute, Priv: KernelPrivilege}, {Base: 2048, Limit: 2048, GrowsPositive: true, Protection: Read | Write, Priv: UserPrivilege}, {Base: 4096, Limit: 2048, GrowsPositive: false, Protection: Read | Write, Priv: UserPrivilege}, {Base: 6144, Limit: 2048, GrowsPositive: true, Protection: Read | Write, Priv: KernelPrivilege}}},
-		privMode:           KernelPrivilege,
+		memory:    make([]byte, machineMemory),
+		registers: make(map[core.Register]uint32),
+		evt:       make(map[uint32]uint32),
+		disk:      Disk{programs: make([][]byte, 0)},
+		mmu: &MMU{
+			Mode: ModeSegmented,
+			Segments: [NumSegments]Segment{
+				{Base: 0, Limit: 2048, GrowsPositive: true, Protection: Read | Execute, Priv: KernelPrivilege},
+				{Base: 2048, Limit: 2048, GrowsPositive: true, Protection: Read | Write, Priv: UserPrivilege},
+				{Base: 4096, Limit: 2048, GrowsPositive: false, Protection: Read | Write, Priv: UserPrivilege},
+				{Base: 6144, Limit: 2048, GrowsPositive: true, Protection: Read | Write, Priv: KernelPrivilege},
+			},
+		},
+		privMode:           KernelPrivilege, // Inicia em kernel mode
 		userMemoryLimit:    uint32(memoryBytes),
 		pageSize:           256,
 		unmappedPages:      make(map[uint32]bool),
@@ -361,11 +369,11 @@ func NewMachine(memoryBytes int) *Machine {
 
 	handlerAddress := uint32(machineMemory - exceptionHandlerSize) // Set handler address
 
-	machine.evt[core.EXC_UNDEFINED] = uint32(memoryBytes)
-	machine.evt[core.EXC_MEMORY_VIOLATION] = uint32(memoryBytes + 4)
-	machine.evt[core.EXC_SEGMENTATION_FAULT] = uint32(memoryBytes + 8)
-	machine.evt[core.EXC_PAGE_FAULT] = uint32(memoryBytes + 4)
-	machine.evt[core.EXC_PROTECTION_FAULT] = uint32(memoryBytes + 4)
+	machine.evt[core.EXC_UNDEFINED] = uint32(memoryBytes)              // Default handler location
+	machine.evt[core.EXC_MEMORY_VIOLATION] = uint32(memoryBytes + 4)   // Set memoty violation handler location
+	machine.evt[core.EXC_SEGMENTATION_FAULT] = uint32(memoryBytes + 8) // Set segmentation fault handler location
+	machine.evt[core.EXC_PAGE_FAULT] = uint32(memoryBytes + 4)         // Set page fault handler location
+	machine.evt[core.EXC_PROTECTION_FAULT] = uint32(memoryBytes + 4)   // Set protection fault handler location
 
 	// Load exception handler to memory
 	copy(machine.memory[handlerAddress:], handlerCode)
