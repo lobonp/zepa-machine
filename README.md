@@ -10,9 +10,11 @@ Read the [ISA](specs/ISA) and [assembly](specs/assembly) specifications for deta
 
 Memory access faults are now classified by type:
 
-- `EXC_SEGMENT_FAULT` (`1`): Address is outside physical memory.
-- `EXC_PAGE_FAULT` (`2`): Address points to an unmapped page.
-- `EXC_PROTECTION_FAULT` (`3`): Address points to protected memory (for example, privileged exception-handler area) or violates page protection.
+- `EXC_UNDEFINED` (`0`): Default error code.
+- `EXC_MEMORY_VIOLATION` (`1`): Address is outside physical memory bounds.
+- `EXC_SEGMENTATION_FAULT` (`2`): MMU translation/segmentation fault.
+- `EXC_PAGE_FAULT` (`3`): Address points to an unmapped page.
+- `EXC_PROTECTION_FAULT` (`4`): Address points to protected memory (for example, privileged exception-handler area) or violates page protection.
 
 ## Running the Machine
 
