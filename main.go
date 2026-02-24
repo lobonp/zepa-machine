@@ -44,7 +44,7 @@ func DebugMemory(m *machine.Machine) {
 			}
 		}
 	}
-	fmt.Println("\n")
+	fmt.Println()
 }
 
 func DebugRegisters(m *machine.Machine) {
@@ -123,13 +123,13 @@ func main() {
 		// Load diskLoader.asm
 		loaderInstrs, err := assembler.LoadAssemblyFile("diskLoader.asm")
 		if err != nil {
-			fmt.Printf("Error loading diskLoader: %v\n", path, err)
+			fmt.Printf("Error loading diskLoader: %v\n", err)
 			continue
 		}
 
 		loaderCode, err := assembler.ConvertInstructionsToBinary(loaderInstrs)
 		if err != nil {
-			fmt.Printf("Error assembling diskLoader: %v\n", path, err)
+			fmt.Printf("Error assembling diskLoader: %v\n", err)
 			continue
 		}
 		copy(m.GetMemory()[:len(loaderCode)], loaderCode)

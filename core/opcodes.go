@@ -1,8 +1,12 @@
 package core
 
 type (
-	Opcode   uint8
-	Register uint8
+	Opcode     uint8
+	Register   uint8
+	FaultError struct {
+		Code uint32
+		Msg  string
+	}
 )
 
 const (
@@ -50,7 +54,13 @@ const (
 
 // Exception codes
 const (
-	EXC_MEMORY_VIOLATION   = 1
 	EXC_UNDEFINED          = 0
+	EXC_MEMORY_VIOLATION   = 1
 	EXC_SEGMENTATION_FAULT = 2
+	EXC_PAGE_FAULT         = 3
+	EXC_PROTECTION_FAULT   = 4
 )
+
+func (e *FaultError) Error() string {
+	return e.Msg
+}
