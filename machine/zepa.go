@@ -66,6 +66,32 @@ type Machine struct {
 	writeProtectedPage map[uint32]bool
 }
 
+func (m *Machine) memRead8(virtualAddress uint32, accessType AccessType, currentPriv Privilege) (byte, error) {
+	physicalAddress, err := m.translate(virtualAddress, accessType, currentPriv)
+	if m.handleFault(err) {
+		return 0, &core.FaultError{Code: core.EXC_UNDEFINED}
+	}
+
+	if m.handleFault(m.memoryAccessFault(physicalAddress, false)) {
+		return 0, &core.FaultError{Code: core.EXC_UNDEFINED}
+	}
+
+	return m.memory[physicalAddress], nil
+}
+
+func (m *Machine) memWrite8(virtualAddress uint32, value byte, accessType AccessType, currentPriv Privilege) error {
+	physicalAddress, err := m.translate(virtualAddress, accessType, currentPriv)
+	if m.handleFault(err) {
+		return &core.FaultError{Code: core.EXC_UNDEFINED}
+	}
+
+	if m.handleFault(m.memoryAccessFault(physicalAddress, true)) {
+		return &core.FaultError{Code: core.EXC_UNDEFINED}
+	}
+	m.memory[physicalAddress] = value
+	return nil
+}
+
 func (m *Machine) InitDisk() {
 	m.disk.programs = make([][]byte, 0)
 }
@@ -133,30 +159,17 @@ func (m *Machine) bgt(inst Instruction) {
 
 func (m *Machine) load(inst Instruction) {
 	addr := uint32(inst.immediate)
-	physical, err := m.translate(addr, Read, m.privMode)
-	if m.handleFault(err) {
+	value, err := m.memRead8(addr, Read, m.privMode)
+	if err != nil {
 		return
 	}
 
-	if m.handleFault(m.memoryAccessFault(physical, false)) {
-		return
-	}
-
-	m.registers[inst.rd] = uint32(m.memory[physical])
+	m.registers[inst.rd] = uint32(value)
 }
 
 func (m *Machine) store(inst Instruction) {
 	addr := uint32(inst.immediate)
-	physical, err := m.translate(addr, Write, m.privMode)
-	if m.handleFault(err) {
-		return
-	}
-
-	if m.handleFault(m.memoryAccessFault(physical, true)) {
-		return
-	}
-
-	m.memory[physical] = byte(m.registers[inst.rd])
+	_ = m.memWrite8(addr, byte(m.registers[inst.rd]), Write, m.privMode)
 }
 
 func (m *Machine) handleFault(err error) bool {
@@ -208,16 +221,11 @@ func (m *Machine) fetch() {
 	var completeInstruction uint32
 	for i := 0; i < 4; i++ {
 		currentInstructionAddress := m.registers[core.PC]
-		physical, err := m.translate(currentInstructionAddress, Execute, m.privMode)
-		if m.handleFault(err) {
+		currentInstruction, err := m.memRead8(currentInstructionAddress, Execute, m.privMode)
+		if err != nil {
 			return
 		}
 
-		if m.handleFault(m.memoryAccessFault(physical, false)) {
-			return
-		}
-
-		currentInstruction := m.memory[physical]
 		completeInstruction |= uint32(currentInstruction) << (24 - 8*i)
 		m.registers[core.PC] += 1
 	}
