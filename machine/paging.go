@@ -1,5 +1,7 @@
 package machine
 
+import "fmt"
+
 const (
 	PageSize             uint32 = 4096
 	PageShift                   = 12
@@ -169,4 +171,19 @@ func MakePhysicalAddress(frameAddr uint32, offset uint32) uint32 {
 
 func IsPageAligned(addr uint32) bool {
 	return (addr & PageOffsetMask) == 0
+}
+
+// PageFault represents a page fault exception.
+type PageFault struct {
+	VirtualAddress uint32
+	Reason         string
+	IsWrite        bool
+}
+
+func (pf *PageFault) Error() string {
+	accessType := "read"
+	if pf.IsWrite {
+		accessType = "write"
+	}
+	return pf.Reason + " (" + accessType + " access at 0x" + fmt.Sprintf("%X", pf.VirtualAddress) + ")"
 }

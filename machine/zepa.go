@@ -59,6 +59,7 @@ type Machine struct {
 	disk               Disk
 	halted             bool
 	mmu                *MMU
+	tlb                *TLB
 	privMode           Privilege
 	userMemoryLimit    uint32
 	pageSize           uint32
@@ -369,6 +370,7 @@ func NewMachine(memoryBytes int) *Machine {
 				{Base: 6144, Limit: 2048, GrowsPositive: true, Protection: Read | Write, Priv: KernelPrivilege},
 			},
 		},
+		tlb:                NewTLB(DefaultTLBSize),
 		privMode:           KernelPrivilege, // Inicia em kernel mode
 		userMemoryLimit:    uint32(memoryBytes),
 		pageSize:           256,
@@ -499,6 +501,81 @@ func (m *Machine) EnablePSE() {
 
 func (m *Machine) EnablePGE() {
 	m.registers[core.CR4] |= core.CR4_PGE
+}
+
+func (m *Machine) TranslateAddress(va uint32) (uint32, error) {
+	if entry, found := m.tlb.Lookup(va); found {
+		offset := ExtractPageOffset(va)
+		pa := MakePhysicalAddress(entry.PhysicalFrame, offset)
+		return pa, nil
+	}
+
+	pte, err := m.PageTableWalk(va)
+	if err != nil {
+		return 0, err
+	}
+
+	// Cache in TLB
+	m.tlb.Insert(va, pte)
+
+	// Compose physical address
+	offset := ExtractPageOffset(va)
+	pa := MakePhysicalAddress(pte.BaseAddress, offset)
+
+	return pa, nil
+}
+
+
+func (m *Machine) PageTableWalk(va uint32) (PageTableEntry, error) {
+	var emptyPTE PageTableEntry
+
+	pdIndex := ExtractPDIndex(va)
+	ptIndex := ExtractPTIndex(va)
+
+	pdBase := m.GetPageDirectoryBase()
+	pdePhysAddr := pdBase + (pdIndex * 4)
+
+	if pdePhysAddr >= uint32(len(m.memory)) {
+		m.SetPageFaultAddress(va)
+		return emptyPTE, fmt.Errorf("page directory access out of bounds at 0x%X", pdePhysAddr)
+	}
+
+	pdeValue := uint32(m.memory[pdePhysAddr]) |
+		(uint32(m.memory[pdePhysAddr+1]) << 8) |
+		(uint32(m.memory[pdePhysAddr+2]) << 16) |
+		(uint32(m.memory[pdePhysAddr+3]) << 24)
+
+	pde := DecodePDE(pdeValue)
+
+	// Check if PDE is present
+	if !pde.Present {
+		m.SetPageFaultAddress(va)
+		return emptyPTE, fmt.Errorf("page directory entry not present at index %d", pdIndex)
+	}
+
+	// Read Page Table Entry
+	ptBase := pde.BaseAddress
+	ptePhysAddr := ptBase + (ptIndex * 4)
+
+	if ptePhysAddr >= uint32(len(m.memory)) {
+		m.SetPageFaultAddress(va)
+		return emptyPTE, fmt.Errorf("page table access out of bounds at 0x%X", ptePhysAddr)
+	}
+
+	pteValue := uint32(m.memory[ptePhysAddr]) |
+		(uint32(m.memory[ptePhysAddr+1]) << 8) |
+		(uint32(m.memory[ptePhysAddr+2]) << 16) |
+		(uint32(m.memory[ptePhysAddr+3]) << 24)
+
+	pte := DecodePTE(pteValue)
+
+	// Check if PTE is present
+	if !pte.Present {
+		m.SetPageFaultAddress(va)
+		return emptyPTE, fmt.Errorf("page table entry not present at index %d", ptIndex)
+	}
+
+	return pte, nil
 }
 
 // CR2 helper functions

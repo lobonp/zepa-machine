@@ -76,3 +76,354 @@ func TestPhysicalAddressAndAlignment(t *testing.T) {
 		t.Fatalf("expected non-aligned address")
 	}
 }
+
+func TestPageTableWalkSuccess(t *testing.T) {
+	m := NewMachine(65536)
+
+	// Setup: Create valid PD and PT in memory
+	pdBase := uint32(0x1000)
+	ptBase := uint32(0x2000)
+	pageFrame := uint32(0x3000)
+
+	// Set CR3 to page directory base
+	m.SetPageDirectoryBase(pdBase)
+
+	// Create PDE pointing to PT
+	pde := PageDirectoryEntry{
+		Present:     true,
+		ReadWrite:   true,
+		BaseAddress: ptBase,
+	}
+	pdeValue := EncodePDE(pde)
+
+	// Write PDE at index 0 (corresponds to VA 0x00000xxx)
+	m.memory[pdBase] = byte(pdeValue)
+	m.memory[pdBase+1] = byte(pdeValue >> 8)
+	m.memory[pdBase+2] = byte(pdeValue >> 16)
+	m.memory[pdBase+3] = byte(pdeValue >> 24)
+
+	// Create PTE pointing to physical page
+	pte := PageTableEntry{
+		Present:     true,
+		ReadWrite:   true,
+		BaseAddress: pageFrame,
+	}
+	pteValue := EncodePTE(pte)
+
+	// Write PTE at index 0 (corresponds to VA 0x00000000)
+	m.memory[ptBase] = byte(pteValue)
+	m.memory[ptBase+1] = byte(pteValue >> 8)
+	m.memory[ptBase+2] = byte(pteValue >> 16)
+	m.memory[ptBase+3] = byte(pteValue >> 24)
+
+	// Perform page table walk
+	va := uint32(0x00000000)
+	returnedPTE, err := m.PageTableWalk(va)
+
+	if err != nil {
+		t.Fatalf("expected successful page table walk, got error: %v", err)
+	}
+
+	if returnedPTE.BaseAddress != pageFrame {
+		t.Fatalf("got frame 0x%X, want 0x%X", returnedPTE.BaseAddress, pageFrame)
+	}
+
+	if !returnedPTE.Present {
+		t.Fatal("expected PTE to be present")
+	}
+}
+
+func TestPageTableWalkPDENotPresent(t *testing.T) {
+	m := NewMachine(65536)
+
+	pdBase := uint32(0x1000)
+	m.SetPageDirectoryBase(pdBase)
+
+	// Create non-present PDE
+	pde := PageDirectoryEntry{
+		Present: false,
+	}
+	pdeValue := EncodePDE(pde)
+
+	// Write PDE at index 0
+	m.memory[pdBase] = byte(pdeValue)
+	m.memory[pdBase+1] = byte(pdeValue >> 8)
+	m.memory[pdBase+2] = byte(pdeValue >> 16)
+	m.memory[pdBase+3] = byte(pdeValue >> 24)
+
+	va := uint32(0x00000000)
+	_, err := m.PageTableWalk(va)
+
+	if err == nil {
+		t.Fatal("expected page fault for non-present PDE")
+	}
+
+	// Check that CR2 was updated
+	if m.GetPageFaultAddress() != va {
+		t.Fatalf("expected CR2=0x%X, got 0x%X", va, m.GetPageFaultAddress())
+	}
+}
+
+func TestPageTableWalkPTENotPresent(t *testing.T) {
+	m := NewMachine(65536)
+
+	pdBase := uint32(0x1000)
+	ptBase := uint32(0x2000)
+
+	m.SetPageDirectoryBase(pdBase)
+
+	// Create present PDE
+	pde := PageDirectoryEntry{
+		Present:     true,
+		BaseAddress: ptBase,
+	}
+	pdeValue := EncodePDE(pde)
+
+	m.memory[pdBase] = byte(pdeValue)
+	m.memory[pdBase+1] = byte(pdeValue >> 8)
+	m.memory[pdBase+2] = byte(pdeValue >> 16)
+	m.memory[pdBase+3] = byte(pdeValue >> 24)
+
+	// Create non-present PTE
+	pte := PageTableEntry{
+		Present: false,
+	}
+	pteValue := EncodePTE(pte)
+
+	m.memory[ptBase] = byte(pteValue)
+	m.memory[ptBase+1] = byte(pteValue >> 8)
+	m.memory[ptBase+2] = byte(pteValue >> 16)
+	m.memory[ptBase+3] = byte(pteValue >> 24)
+
+	va := uint32(0x00000000)
+	_, err := m.PageTableWalk(va)
+
+	if err == nil {
+		t.Fatal("expected page fault for non-present PTE")
+	}
+
+	// Check that CR2 was updated
+	if m.GetPageFaultAddress() != va {
+		t.Fatalf("expected CR2=0x%X, got 0x%X", va, m.GetPageFaultAddress())
+	}
+}
+
+func TestTranslateAddressTLBMiss(t *testing.T) {
+	m := NewMachine(65536)
+
+	pdBase := uint32(0x1000)
+	ptBase := uint32(0x2000)
+	pageFrame := uint32(0x3000)
+
+	m.SetPageDirectoryBase(pdBase)
+
+	// Setup PD and PT
+	pde := PageDirectoryEntry{
+		Present:     true,
+		ReadWrite:   true,
+		BaseAddress: ptBase,
+	}
+	pdeValue := EncodePDE(pde)
+	m.memory[pdBase] = byte(pdeValue)
+	m.memory[pdBase+1] = byte(pdeValue >> 8)
+	m.memory[pdBase+2] = byte(pdeValue >> 16)
+	m.memory[pdBase+3] = byte(pdeValue >> 24)
+
+	pte := PageTableEntry{
+		Present:     true,
+		ReadWrite:   true,
+		BaseAddress: pageFrame,
+	}
+	pteValue := EncodePTE(pte)
+	m.memory[ptBase] = byte(pteValue)
+	m.memory[ptBase+1] = byte(pteValue >> 8)
+	m.memory[ptBase+2] = byte(pteValue >> 16)
+	m.memory[ptBase+3] = byte(pteValue >> 24)
+
+	va := uint32(0x00000000)
+	pa, err := m.TranslateAddress(va)
+
+	if err != nil {
+		t.Fatalf("expected successful translation, got error: %v", err)
+	}
+
+	// Physical address should be pageFrame + offset
+	expectedPA := pageFrame
+	if pa != expectedPA {
+		t.Fatalf("got PA 0x%X, want 0x%X", pa, expectedPA)
+	}
+
+	// Verify TLB has entry
+	if m.tlb.Size() != 1 {
+		t.Fatalf("expected 1 TLB entry, got %d", m.tlb.Size())
+	}
+}
+
+func TestTranslateAddressTLBHit(t *testing.T) {
+	m := NewMachine(65536)
+
+	pdBase := uint32(0x1000)
+	ptBase := uint32(0x2000)
+	pageFrame := uint32(0x3000)
+
+	m.SetPageDirectoryBase(pdBase)
+
+	// Setup PD and PT
+	pde := PageDirectoryEntry{
+		Present:     true,
+		ReadWrite:   true,
+		BaseAddress: ptBase,
+	}
+	pdeValue := EncodePDE(pde)
+	m.memory[pdBase] = byte(pdeValue)
+	m.memory[pdBase+1] = byte(pdeValue >> 8)
+	m.memory[pdBase+2] = byte(pdeValue >> 16)
+	m.memory[pdBase+3] = byte(pdeValue >> 24)
+
+	pte := PageTableEntry{
+		Present:     true,
+		ReadWrite:   true,
+		BaseAddress: pageFrame,
+	}
+	pteValue := EncodePTE(pte)
+	m.memory[ptBase] = byte(pteValue)
+	m.memory[ptBase+1] = byte(pteValue >> 8)
+	m.memory[ptBase+2] = byte(pteValue >> 16)
+	m.memory[ptBase+3] = byte(pteValue >> 24)
+
+	va := uint32(0x00000000)
+
+	// First translation: TLB miss
+	pa1, err := m.TranslateAddress(va)
+	if err != nil {
+		t.Fatalf("first translation failed: %v", err)
+	}
+
+	initialTLBSize := m.tlb.Size()
+
+	// Second translation: should be TLB hit (TLB size unchanged)
+	pa2, err := m.TranslateAddress(va)
+	if err != nil {
+		t.Fatalf("second translation failed: %v", err)
+	}
+
+	if pa1 != pa2 {
+		t.Fatalf("PAs differ: first 0x%X, second 0x%X", pa1, pa2)
+	}
+
+	if m.tlb.Size() != initialTLBSize {
+		t.Fatalf("expected TLB size unchanged at %d, got %d", initialTLBSize, m.tlb.Size())
+	}
+}
+
+func TestTranslateAddressWithOffset(t *testing.T) {
+	m := NewMachine(65536)
+
+	pdBase := uint32(0x1000)
+	ptBase := uint32(0x2000)
+	pageFrame := uint32(0x3000)
+
+	m.SetPageDirectoryBase(pdBase)
+
+	// Setup PD and PT
+	pde := PageDirectoryEntry{
+		Present:     true,
+		ReadWrite:   true,
+		BaseAddress: ptBase,
+	}
+	pdeValue := EncodePDE(pde)
+	m.memory[pdBase] = byte(pdeValue)
+	m.memory[pdBase+1] = byte(pdeValue >> 8)
+	m.memory[pdBase+2] = byte(pdeValue >> 16)
+	m.memory[pdBase+3] = byte(pdeValue >> 24)
+
+	pte := PageTableEntry{
+		Present:     true,
+		ReadWrite:   true,
+		BaseAddress: pageFrame,
+	}
+	pteValue := EncodePTE(pte)
+	m.memory[ptBase] = byte(pteValue)
+	m.memory[ptBase+1] = byte(pteValue >> 8)
+	m.memory[ptBase+2] = byte(pteValue >> 16)
+	m.memory[ptBase+3] = byte(pteValue >> 24)
+
+	// VA with offset within page
+	va := uint32(0x00000ABC)
+	pa, err := m.TranslateAddress(va)
+
+	if err != nil {
+		t.Fatalf("expected successful translation, got error: %v", err)
+	}
+
+	// PA should preserve the offset
+	offset := ExtractPageOffset(va)
+	expectedPA := pageFrame + offset
+	if pa != expectedPA {
+		t.Fatalf("got PA 0x%X, want 0x%X", pa, expectedPA)
+	}
+}
+
+func TestTranslateAddressPreservesFlags(t *testing.T) {
+	m := NewMachine(65536)
+
+	pdBase := uint32(0x1000)
+	ptBase := uint32(0x2000)
+	pageFrame := uint32(0x3000)
+
+	m.SetPageDirectoryBase(pdBase)
+
+	// Setup PD and PT
+	pde := PageDirectoryEntry{
+		Present:     true,
+		ReadWrite:   true,
+		BaseAddress: ptBase,
+	}
+	pdeValue := EncodePDE(pde)
+	m.memory[pdBase] = byte(pdeValue)
+	m.memory[pdBase+1] = byte(pdeValue >> 8)
+	m.memory[pdBase+2] = byte(pdeValue >> 16)
+	m.memory[pdBase+3] = byte(pdeValue >> 24)
+
+	// PTE with specific flags
+	pte := PageTableEntry{
+		Present:        true,
+		ReadWrite:      false,
+		UserSupervisor: true,
+		Dirty:          true,
+		Global:         false,
+		BaseAddress:    pageFrame,
+	}
+	pteValue := EncodePTE(pte)
+	m.memory[ptBase] = byte(pteValue)
+	m.memory[ptBase+1] = byte(pteValue >> 8)
+	m.memory[ptBase+2] = byte(pteValue >> 16)
+	m.memory[ptBase+3] = byte(pteValue >> 24)
+
+	va := uint32(0x00000000)
+	pa, err := m.TranslateAddress(va)
+
+	if err != nil {
+		t.Fatalf("expected successful translation, got error: %v", err)
+	}
+
+	if pa != pageFrame {
+		t.Fatalf("got PA 0x%X, want 0x%X", pa, pageFrame)
+	}
+
+	// Verify TLB cached flags correctly
+	tlbEntry, found := m.tlb.Lookup(va)
+	if !found {
+		t.Fatal("expected TLB hit")
+	}
+
+	if tlbEntry.ReadWrite {
+		t.Fatal("expected ReadWrite=false in TLB")
+	}
+	if !tlbEntry.UserSupervisor {
+		t.Fatal("expected UserSupervisor=true in TLB")
+	}
+	if !tlbEntry.Dirty {
+		t.Fatal("expected Dirty=true in TLB")
+	}
+}
