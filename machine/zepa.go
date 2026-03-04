@@ -100,12 +100,21 @@ func (m *Machine) sub(inst Instruction) {
 }
 
 func (m *Machine) cmp(inst Instruction) {
-	if m.registers[inst.rs1] == m.registers[inst.rs2] {
+	val1 := m.registers[inst.rs1]
+	val2 := m.registers[inst.rs2]
+
+	m.registers[core.SR] = 0
+	m.registers[core.EFLAGS] &^= (core.EFLAGS_Z | core.EFLAGS_L | core.EFLAGS_G)
+
+	if val1 == val2 {
 		m.registers[core.SR] = 0
-	} else if m.registers[inst.rs1] > m.registers[inst.rs2] {
+		m.registers[core.EFLAGS] |= core.EFLAGS_Z
+	} else if val1 > val2 {
 		m.registers[core.SR] = 2
+		m.registers[core.EFLAGS] |= core.EFLAGS_G
 	} else {
 		m.registers[core.SR] = 1
+		m.registers[core.EFLAGS] |= core.EFLAGS_L
 	}
 }
 
@@ -378,6 +387,13 @@ func NewMachine(memoryBytes int) *Machine {
 	// Load exception handler to memory
 	copy(machine.memory[handlerAddress:], handlerCode)
 
+	// Initialize control registers
+	machine.registers[core.CR0] = 0
+	machine.registers[core.CR2] = 0
+	machine.registers[core.CR3] = 0
+	machine.registers[core.CR4] = 0
+	machine.registers[core.EFLAGS] = 0
+
 	return machine
 }
 
@@ -428,4 +444,89 @@ func (m *Machine) udf(inst Instruction) {
 
 func (m *Machine) translate(va uint32, access AccessType, priv Privilege) (uint32, error) {
 	return m.mmu.Translate(va, access, priv)
+}
+
+// CR0 helper functions
+func (m *Machine) IsPagingEnabled() bool {
+	return (m.registers[core.CR0] & core.CR0_PG) != 0
+}
+
+func (m *Machine) IsProtectedModeEnabled() bool {
+	return (m.registers[core.CR0] & core.CR0_PE) != 0
+}
+
+func (m *Machine) IsWriteProtectEnabled() bool {
+	return (m.registers[core.CR0] & core.CR0_WP) != 0
+}
+
+func (m *Machine) EnablePaging() {
+	m.registers[core.CR0] |= core.CR0_PG
+}
+
+func (m *Machine) DisablePaging() {
+	m.registers[core.CR0] &^= core.CR0_PG
+}
+
+func (m *Machine) EnableProtectedMode() {
+	m.registers[core.CR0] |= core.CR0_PE
+}
+
+func (m *Machine) EnableWriteProtect() {
+	m.registers[core.CR0] |= core.CR0_WP
+}
+
+// CR3 helper functions
+func (m *Machine) GetPageDirectoryBase() uint32 {
+	return m.registers[core.CR3] & core.CR3_PDBR_MASK
+}
+
+func (m *Machine) SetPageDirectoryBase(physAddr uint32) {
+	m.registers[core.CR3] = physAddr & core.CR3_PDBR_MASK
+}
+
+// CR4 helper functions
+func (m *Machine) IsPSEEnabled() bool {
+	return (m.registers[core.CR4] & core.CR4_PSE) != 0
+}
+
+func (m *Machine) IsPGEEnabled() bool {
+	return (m.registers[core.CR4] & core.CR4_PGE) != 0
+}
+
+func (m *Machine) EnablePSE() {
+	m.registers[core.CR4] |= core.CR4_PSE
+}
+
+func (m *Machine) EnablePGE() {
+	m.registers[core.CR4] |= core.CR4_PGE
+}
+
+// CR2 helper functions
+func (m *Machine) SetPageFaultAddress(addr uint32) {
+	m.registers[core.CR2] = addr
+}
+
+func (m *Machine) GetPageFaultAddress() uint32 {
+	return m.registers[core.CR2]
+}
+
+// EFLAGS helper functions
+func (m *Machine) AreInterruptsEnabled() bool {
+	return (m.registers[core.EFLAGS] & core.EFLAGS_IF) != 0
+}
+
+func (m *Machine) EnableInterrupts() {
+	m.registers[core.EFLAGS] |= core.EFLAGS_IF
+}
+
+func (m *Machine) DisableInterrupts() {
+	m.registers[core.EFLAGS] &^= core.EFLAGS_IF
+}
+
+func (m *Machine) GetIOPL() uint8 {
+	return uint8((m.registers[core.EFLAGS] & core.EFLAGS_IOPL_MASK) >> 12)
+}
+
+func (m *Machine) SetIOPL(level uint8) {
+	m.registers[core.EFLAGS] = (m.registers[core.EFLAGS] & ^core.EFLAGS_IOPL_MASK) | (uint32(level&3) << 12)
 }
