@@ -528,5 +528,5 @@ func (m *Machine) GetIOPL() uint8 {
 }
 
 func (m *Machine) SetIOPL(level uint8) {
-	m.registers[core.EFLAGS] = (m.registers[core.EFLAGS] & ^core.EFLAGS_IOPL_MASK) | (uint32(level&3) << 12)
+	m.registers[core.EFLAGS] = (m.registers[core.EFLAGS] &^ uint32(core.EFLAGS_IOPL_MASK)) | (uint32(level&3) << 12)
 }
