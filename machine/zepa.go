@@ -19,6 +19,10 @@ const (
 	funct6Length = 6
 	immediateLen = 16
 	word         = 32
+
+	// wRegisterSaveAreaBytes is the size of the W-register backup area appended
+	// after the main memory. Each of the 6 W registers occupies 4 bytes (uint32, little-endian).
+	wRegisterSaveAreaBytes = 6 * 4
 )
 
 var operations = map[byte]Operation{
@@ -62,9 +66,6 @@ type Machine struct {
 	tlb                *TLB
 	privMode           Privilege
 	userMemoryLimit    uint32
-	pageSize           uint32
-	unmappedPages      map[uint32]bool
-	writeProtectedPage map[uint32]bool
 }
 
 func (m *Machine) InitDisk() {
@@ -78,8 +79,39 @@ func (m *Machine) AddToDisk(program []byte) {
 func (m *Machine) d2m(inst Instruction) {
 	if len(m.disk.programs) > 0 {
 		program := m.disk.programs[0]
-		copy(m.memory[m.registers[core.W1]:], program)
-		m.registers[core.W4] = uint32(len(program))
+		destVA := m.registers[core.W1]
+		bytesWritten := uint32(0)
+
+		for i, b := range program {
+			offset := uint32(i)
+			va := destVA + offset
+			if va < destVA {
+				m.registers[core.W3] = 0
+				m.registers[core.W4] = bytesWritten
+				m.disk.programs = m.disk.programs[1:]
+				return
+			}
+
+			physical, err := m.translate(va, Write, m.privMode)
+			if err != nil {
+				m.registers[core.W3] = 0
+				m.registers[core.W4] = bytesWritten
+				m.disk.programs = m.disk.programs[1:]
+				return
+			}
+
+			if err := m.memoryAccessFault(physical, true); err != nil {
+				m.registers[core.W3] = 0
+				m.registers[core.W4] = bytesWritten
+				m.disk.programs = m.disk.programs[1:]
+				return
+			}
+
+			m.memory[physical] = b
+			bytesWritten++
+		}
+
+		m.registers[core.W4] = bytesWritten
 		m.registers[core.W3] = 1
 		m.disk.programs = m.disk.programs[1:]
 	} else {
@@ -185,6 +217,8 @@ func (m *Machine) handleFault(err error) bool {
 }
 
 func (m *Machine) memoryAccessFault(addr uint32, isWrite bool) error {
+	_ = isWrite
+
 	if addr >= uint32(len(m.memory)) {
 		return &core.FaultError{Code: core.EXC_MEMORY_VIOLATION, Msg: "MEMORY_VIOLATION: ADDRESS OUT OF RANGE"}
 	}
@@ -194,36 +228,24 @@ func (m *Machine) memoryAccessFault(addr uint32, isWrite bool) error {
 		return &core.FaultError{Code: core.EXC_PROTECTION_FAULT, Msg: "PROTECTION_FAULT: PRIVILEGED MEMORY"}
 	}
 
-	page := addr / m.pageSize
-	if m.unmappedPages[page] {
-		return &core.FaultError{Code: core.EXC_PAGE_FAULT, Msg: "PAGE_FAULT: UNMAPPED PAGE"}
-	}
-
-	if isWrite && m.writeProtectedPage[page] {
-		return &core.FaultError{Code: core.EXC_PROTECTION_FAULT, Msg: "PROTECTION_FAULT: WRITE-PROTECTED PAGE"}
-	}
-
 	return nil
 }
 
-func (m *Machine) setPageMapped(page uint32, mapped bool) {
-	m.unmappedPages[page] = !mapped
-}
-
-func (m *Machine) setPageWriteProtected(page uint32, protected bool) {
-	m.writeProtectedPage[page] = protected
-}
-
 func (m *Machine) fetch() {
+	instrStart := m.registers[core.PC]
 	var completeInstruction uint32
 	for i := 0; i < 4; i++ {
 		currentInstructionAddress := m.registers[core.PC]
 		physical, err := m.translate(currentInstructionAddress, Execute, m.privMode)
-		if m.handleFault(err) {
+		if err != nil {
+			m.registers[core.PC] = instrStart
+			m.handleFault(err)
 			return
 		}
 
-		if m.handleFault(m.memoryAccessFault(physical, false)) {
+		if faultErr := m.memoryAccessFault(physical, false); faultErr != nil {
+			m.registers[core.PC] = instrStart
+			m.handleFault(faultErr)
 			return
 		}
 
@@ -353,10 +375,12 @@ func NewMachine(memoryBytes int) *Machine {
 	if segLimit > MaxSegmentSize {
 		segLimit = MaxSegmentSize
 	}
-	handlerCodePA := uint32(segLimit) - uint32(len(handlerCode))
+	handlerCodePA := uint32(0)
+	if segLimit >= len(handlerCode) {
+		handlerCodePA = uint32(segLimit - len(handlerCode))
+	}
 
-	qntRegisters := len(assembler.RegisterMap)
-	machineMemory := memoryBytes + qntRegisters
+	machineMemory := memoryBytes + wRegisterSaveAreaBytes
 	tlb := NewTLB(DefaultTLBSize)
 
 	machine := &Machine{
@@ -365,7 +389,8 @@ func NewMachine(memoryBytes int) *Machine {
 		evt:       make(map[uint32]uint32),
 		disk:      Disk{programs: make([][]byte, 0)},
 		mmu: &MMU{
-			Mode: ModeSegmented,
+			Mode:       ModeSegmented,
+			MemorySize: uint32(machineMemory),
 			Segments: [NumSegments]Segment{
 				{Base: 0, Limit: uint32(MaxSegmentSize), GrowsPositive: true, Protection: Read | Execute, Priv: KernelPrivilege},
 				{Base: 16384, Limit: 16384, GrowsPositive: true, Protection: Read | Write, Priv: UserPrivilege},
@@ -377,9 +402,6 @@ func NewMachine(memoryBytes int) *Machine {
 		tlb:                tlb,
 		privMode:           KernelPrivilege,
 		userMemoryLimit:    uint32(memoryBytes), // W-backup area starts here
-		pageSize:           4096,
-		unmappedPages:      make(map[uint32]bool),
-		writeProtectedPage: make(map[uint32]bool),
 	}
 
 	machine.evt[core.EXC_UNDEFINED] = handlerCodePA
@@ -402,13 +424,15 @@ func NewMachine(memoryBytes int) *Machine {
 func (m *Machine) exception(code uint32) {
 	fmt.Printf("Exception raised: Code %d\n", code)
 
-	// Save W registers into memory
-	m.memory[len(m.memory)-6] = byte(m.registers[core.W0])
-	m.memory[len(m.memory)-5] = byte(m.registers[core.W1])
-	m.memory[len(m.memory)-4] = byte(m.registers[core.W2])
-	m.memory[len(m.memory)-3] = byte(m.registers[core.W3])
-	m.memory[len(m.memory)-2] = byte(m.registers[core.W4])
-	m.memory[len(m.memory)-1] = byte(m.registers[core.W5])
+	// Save W registers into memory as little-endian uint32 (4 bytes each).
+	base := len(m.memory) - wRegisterSaveAreaBytes
+	for i, reg := range []core.Register{core.W0, core.W1, core.W2, core.W3, core.W4, core.W5} {
+		v := m.registers[reg]
+		m.memory[base+i*4] = byte(v)
+		m.memory[base+i*4+1] = byte(v >> 8)
+		m.memory[base+i*4+2] = byte(v >> 16)
+		m.memory[base+i*4+3] = byte(v >> 24)
+	}
 
 	// Save information
 	m.registers[core.LR] = m.registers[core.PC]
@@ -430,13 +454,14 @@ func (m *Machine) ret(inst Instruction) {
 	m.registers[core.PC] = m.registers[core.LR]
 	m.registers[core.SSR] = m.registers[core.SR]
 
-	// Restore W registers
-	m.registers[core.W0] = uint32(m.memory[len(m.memory)-6])
-	m.registers[core.W1] = uint32(m.memory[len(m.memory)-5])
-	m.registers[core.W2] = uint32(m.memory[len(m.memory)-4])
-	m.registers[core.W3] = uint32(m.memory[len(m.memory)-3])
-	m.registers[core.W4] = uint32(m.memory[len(m.memory)-2])
-	m.registers[core.W5] = uint32(m.memory[len(m.memory)-1])
+	// Restore W registers from little-endian uint32 (4 bytes each).
+	base := len(m.memory) - wRegisterSaveAreaBytes
+	for i, reg := range []core.Register{core.W0, core.W1, core.W2, core.W3, core.W4, core.W5} {
+		m.registers[reg] = uint32(m.memory[base+i*4]) |
+			uint32(m.memory[base+i*4+1])<<8 |
+			uint32(m.memory[base+i*4+2])<<16 |
+			uint32(m.memory[base+i*4+3])<<24
+	}
 
 	// Reset link register
 	m.registers[core.LR] = 0
@@ -456,7 +481,7 @@ func (m *Machine) translate(va uint32, access AccessType, priv Privilege) (uint3
 		return segmentedAddress, nil
 	}
 
-	return m.mmu.TranslateWithPaging(segmentedAddress, m.GetPageDirectoryBase(), m.memory, m.SetPageFaultAddress)
+	return m.mmu.TranslateWithPaging(segmentedAddress, access, priv, m.GetPageDirectoryBase(), m.memory, m.SetPageFaultAddress)
 }
 
 // CR0 helper functions
@@ -515,11 +540,11 @@ func (m *Machine) EnablePGE() {
 }
 
 func (m *Machine) TranslateAddress(va uint32) (uint32, error) {
-	return m.mmu.TranslateWithPaging(va, m.GetPageDirectoryBase(), m.memory, m.SetPageFaultAddress)
+	return m.mmu.TranslateWithPaging(va, Read, m.privMode, m.GetPageDirectoryBase(), m.memory, m.SetPageFaultAddress)
 }
 
 func (m *Machine) PageTableWalk(va uint32) (PageTableEntry, error) {
-	return m.mmu.PageTableWalk(va, m.GetPageDirectoryBase(), m.memory, m.SetPageFaultAddress)
+	return m.mmu.PageTableWalk(va, m.privMode, m.GetPageDirectoryBase(), m.memory, m.SetPageFaultAddress)
 }
 
 // CR2 helper functions

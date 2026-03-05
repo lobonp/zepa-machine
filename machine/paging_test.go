@@ -431,6 +431,71 @@ func TestTranslateAddressPreservesFlags(t *testing.T) {
 	}
 }
 
+func TestTranslateAddressRejectsUserAccessToKernelPage(t *testing.T) {
+	m := NewMachine(65536)
+	m.mmu.Mode = ModeFlat
+	m.EnablePaging()
+	m.privMode = UserPrivilege
+
+	pdBase := uint32(0x1000)
+	ptBase := uint32(0x2000)
+	pageFrame := uint32(0x3000)
+	m.SetPageDirectoryBase(pdBase)
+
+	writeUint32LE(m.memory, pdBase, EncodePDE(PageDirectoryEntry{
+		Present:        true,
+		ReadWrite:      true,
+		UserSupervisor: false,
+		BaseAddress:    ptBase,
+	}))
+	writeUint32LE(m.memory, ptBase, EncodePTE(PageTableEntry{
+		Present:        true,
+		ReadWrite:      true,
+		UserSupervisor: false,
+		BaseAddress:    pageFrame,
+	}))
+
+	_, err := m.TranslateAddress(0x00000000)
+	if err == nil {
+		t.Fatal("expected protection fault for user access to kernel page")
+	}
+}
+
+func TestTranslateAddressTLBHitStillChecksUserAccess(t *testing.T) {
+	m := NewMachine(65536)
+	m.mmu.Mode = ModeFlat
+	m.EnablePaging()
+
+	pdBase := uint32(0x1000)
+	ptBase := uint32(0x2000)
+	pageFrame := uint32(0x3000)
+	m.SetPageDirectoryBase(pdBase)
+
+	writeUint32LE(m.memory, pdBase, EncodePDE(PageDirectoryEntry{
+		Present:        true,
+		ReadWrite:      true,
+		UserSupervisor: false,
+		BaseAddress:    ptBase,
+	}))
+	writeUint32LE(m.memory, ptBase, EncodePTE(PageTableEntry{
+		Present:        true,
+		ReadWrite:      true,
+		UserSupervisor: false,
+		BaseAddress:    pageFrame,
+	}))
+
+	va := uint32(0x00000044)
+	m.privMode = KernelPrivilege
+	if _, err := m.TranslateAddress(va); err != nil {
+		t.Fatalf("expected kernel translation to succeed, got %v", err)
+	}
+
+	m.privMode = UserPrivilege
+	if _, err := m.TranslateAddress(va); err == nil {
+		t.Fatal("expected protection fault on TLB hit for user access to kernel page")
+	}
+}
+
 func writeUint32LE(memory []byte, addr uint32, value uint32) {
 	memory[addr] = byte(value)
 	memory[addr+1] = byte(value >> 8)

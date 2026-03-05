@@ -44,9 +44,10 @@ type Segment struct {
 }
 
 type MMU struct {
-	Mode     MMUMode
-	Segments [NumSegments]Segment
-	tlb      *TLB
+	Mode       MMUMode
+	Segments   [NumSegments]Segment
+	tlb        *TLB
+	MemorySize uint32
 }
 
 func (m *MMU) Translate(virtualAddress uint32, access AccessType, currentPriv Privilege) (uint32, error) {
@@ -89,6 +90,9 @@ func (m *MMU) Translate(virtualAddress uint32, access AccessType, currentPriv Pr
 
 	if seg.GrowsPositive && offset < seg.Limit {
 		physicalAddress = seg.Base + offset
+		if m.MemorySize > 0 && physicalAddress >= m.MemorySize {
+			return 0, &core.FaultError{Code: core.EXC_MEMORY_VIOLATION, Msg: "MEMORY_VIOLATION: SEGMENT ADDRESS OUT OF RANGE"}
+		}
 		err = nil
 	}
 
@@ -96,6 +100,9 @@ func (m *MMU) Translate(virtualAddress uint32, access AccessType, currentPriv Pr
 		realOffset := int32(offset) - int32(MaxSegmentSize)
 		if uint32(-realOffset) <= seg.Limit {
 			physicalAddress = uint32(int32(seg.Base) + realOffset)
+			if m.MemorySize > 0 && physicalAddress >= m.MemorySize {
+				return 0, &core.FaultError{Code: core.EXC_MEMORY_VIOLATION, Msg: "MEMORY_VIOLATION: SEGMENT ADDRESS OUT OF RANGE"}
+			}
 			err = nil
 		}
 	}
@@ -109,17 +116,27 @@ func (m *MMU) ensureTLB() {
 	}
 }
 
-func (m *MMU) TranslateWithPaging(va uint32, pageDirectoryBase uint32, memory []byte, setPageFaultAddress func(uint32)) (uint32, error) {
+func (m *MMU) TranslateWithPaging(va uint32, access AccessType, currentPriv Privilege, pageDirectoryBase uint32, memory []byte, setPageFaultAddress func(uint32)) (uint32, error) {
 	m.ensureTLB()
 
 	if entry, found := m.tlb.Lookup(va); found {
+		if currentPriv == UserPrivilege && !entry.UserSupervisor {
+			return 0, &core.FaultError{Code: core.EXC_PROTECTION_FAULT, Msg: "PROTECTION_FAULT: USER ACCESS TO KERNEL PAGE"}
+		}
+		if access&Write != 0 && !entry.ReadWrite {
+			return 0, &core.FaultError{Code: core.EXC_PROTECTION_FAULT, Msg: "PROTECTION_FAULT: PAGE IS READ-ONLY"}
+		}
 		offset := ExtractPageOffset(va)
 		return MakePhysicalAddress(entry.PhysicalFrame, offset), nil
 	}
 
-	pte, err := m.PageTableWalk(va, pageDirectoryBase, memory, setPageFaultAddress)
+	pte, err := m.PageTableWalk(va, currentPriv, pageDirectoryBase, memory, setPageFaultAddress)
 	if err != nil {
 		return 0, err
+	}
+
+	if access&Write != 0 && !pte.ReadWrite {
+		return 0, &core.FaultError{Code: core.EXC_PROTECTION_FAULT, Msg: "PROTECTION_FAULT: PAGE IS READ-ONLY"}
 	}
 
 	// Cache translated page in TLB for later accesses.
@@ -129,7 +146,7 @@ func (m *MMU) TranslateWithPaging(va uint32, pageDirectoryBase uint32, memory []
 	return MakePhysicalAddress(pte.BaseAddress, offset), nil
 }
 
-func (m *MMU) PageTableWalk(va uint32, pageDirectoryBase uint32, memory []byte, setPageFaultAddress func(uint32)) (PageTableEntry, error) {
+func (m *MMU) PageTableWalk(va uint32, currentPriv Privilege, pageDirectoryBase uint32, memory []byte, setPageFaultAddress func(uint32)) (PageTableEntry, error) {
 	var emptyPTE PageTableEntry
 
 	pdIndex := ExtractPDIndex(va)
@@ -152,6 +169,10 @@ func (m *MMU) PageTableWalk(va uint32, pageDirectoryBase uint32, memory []byte, 
 		return emptyPTE, &core.FaultError{Code: core.EXC_PAGE_FAULT, Msg: "PAGE_FAULT: PAGE DIRECTORY ENTRY NOT PRESENT"}
 	}
 
+	if currentPriv == UserPrivilege && !pde.UserSupervisor {
+		return emptyPTE, &core.FaultError{Code: core.EXC_PROTECTION_FAULT, Msg: "PROTECTION_FAULT: USER ACCESS TO KERNEL PAGE DIRECTORY"}
+	}
+
 	ptBase := pde.BaseAddress
 	ptePhysAddr := ptBase + (ptIndex * 4)
 
@@ -169,6 +190,10 @@ func (m *MMU) PageTableWalk(va uint32, pageDirectoryBase uint32, memory []byte, 
 	if !pte.Present {
 		setPageFaultAddress(va)
 		return emptyPTE, &core.FaultError{Code: core.EXC_PAGE_FAULT, Msg: "PAGE_FAULT: PAGE TABLE ENTRY NOT PRESENT"}
+	}
+
+	if currentPriv == UserPrivilege && !pte.UserSupervisor {
+		return emptyPTE, &core.FaultError{Code: core.EXC_PROTECTION_FAULT, Msg: "PROTECTION_FAULT: USER ACCESS TO KERNEL PAGE"}
 	}
 
 	return pte, nil

@@ -339,7 +339,9 @@ func TestLoadWithSegmentationFault(t *testing.T) {
 func TestPageFaultException(t *testing.T) {
 	machine := NewMachine(2048)
 	machine.mmu.Mode = ModeFlat
-	machine.setPageMapped(0, false)
+	machine.EnablePaging()
+	machine.SetPageDirectoryBase(0x400)
+	writeUint32LE(machine.memory, 0x400, EncodePDE(PageDirectoryEntry{Present: false}))
 	inst := Instruction{opcode: (*Machine).load, immediate: 0x100}
 
 	// Get default exit
