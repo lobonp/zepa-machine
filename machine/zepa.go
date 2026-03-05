@@ -354,6 +354,7 @@ func NewMachine(memoryBytes int) *Machine {
 	qntRegisters := len(assembler.RegisterMap)
 	exceptionHandlerSize := len(handlerCode) + qntRegisters
 	machineMemory := memoryBytes + exceptionHandlerSize
+	tlb := NewTLB(DefaultTLBSize)
 
 	// Define the machine
 	machine := &Machine{
@@ -369,8 +370,9 @@ func NewMachine(memoryBytes int) *Machine {
 				{Base: 49152, Limit: 16384, GrowsPositive: false, Protection: Read | Write, Priv: UserPrivilege},
 				{Base: 32768, Limit: 16384, GrowsPositive: true, Protection: Read | Write, Priv: KernelPrivilege},
 			},
+			tlb: tlb,
 		},
-		tlb:                NewTLB(DefaultTLBSize),
+		tlb:                tlb,
 		privMode:           KernelPrivilege, // Inicia em kernel mode
 		userMemoryLimit:    uint32(memoryBytes),
 		pageSize:           4096,
@@ -457,7 +459,7 @@ func (m *Machine) translate(va uint32, access AccessType, priv Privilege) (uint3
 		return segmentedAddress, nil
 	}
 
-	return m.TranslateAddress(segmentedAddress)
+	return m.mmu.TranslateWithPaging(segmentedAddress, m.GetPageDirectoryBase(), m.memory, m.SetPageFaultAddress)
 }
 
 // CR0 helper functions
@@ -516,82 +518,11 @@ func (m *Machine) EnablePGE() {
 }
 
 func (m *Machine) TranslateAddress(va uint32) (uint32, error) {
-	if m.tlb == nil {
-		m.tlb = NewTLB(DefaultTLBSize)
-	}
-
-	if entry, found := m.tlb.Lookup(va); found {
-		offset := ExtractPageOffset(va)
-		pa := MakePhysicalAddress(entry.PhysicalFrame, offset)
-		return pa, nil
-	}
-
-	pte, err := m.PageTableWalk(va)
-	if err != nil {
-		return 0, err
-	}
-
-	// Cache in TLB
-	m.tlb.Insert(va, pte)
-
-	// Compose physical address
-	offset := ExtractPageOffset(va)
-	pa := MakePhysicalAddress(pte.BaseAddress, offset)
-
-	return pa, nil
+	return m.mmu.TranslateWithPaging(va, m.GetPageDirectoryBase(), m.memory, m.SetPageFaultAddress)
 }
 
-
 func (m *Machine) PageTableWalk(va uint32) (PageTableEntry, error) {
-	var emptyPTE PageTableEntry
-
-	pdIndex := ExtractPDIndex(va)
-	ptIndex := ExtractPTIndex(va)
-
-	pdBase := m.GetPageDirectoryBase()
-	pdePhysAddr := pdBase + (pdIndex * 4)
-
-	if pdePhysAddr+3 >= uint32(len(m.memory)) {
-		m.SetPageFaultAddress(va)
-		return emptyPTE, &core.FaultError{Code: core.EXC_PAGE_FAULT, Msg: "PAGE_FAULT: PAGE DIRECTORY ACCESS OUT OF BOUNDS"}
-	}
-
-	pdeValue := uint32(m.memory[pdePhysAddr]) |
-		(uint32(m.memory[pdePhysAddr+1]) << 8) |
-		(uint32(m.memory[pdePhysAddr+2]) << 16) |
-		(uint32(m.memory[pdePhysAddr+3]) << 24)
-
-	pde := DecodePDE(pdeValue)
-
-	// Check if PDE is present
-	if !pde.Present {
-		m.SetPageFaultAddress(va)
-		return emptyPTE, &core.FaultError{Code: core.EXC_PAGE_FAULT, Msg: "PAGE_FAULT: PAGE DIRECTORY ENTRY NOT PRESENT"}
-	}
-
-	// Read Page Table Entry
-	ptBase := pde.BaseAddress
-	ptePhysAddr := ptBase + (ptIndex * 4)
-
-	if ptePhysAddr+3 >= uint32(len(m.memory)) {
-		m.SetPageFaultAddress(va)
-		return emptyPTE, &core.FaultError{Code: core.EXC_PAGE_FAULT, Msg: "PAGE_FAULT: PAGE TABLE ACCESS OUT OF BOUNDS"}
-	}
-
-	pteValue := uint32(m.memory[ptePhysAddr]) |
-		(uint32(m.memory[ptePhysAddr+1]) << 8) |
-		(uint32(m.memory[ptePhysAddr+2]) << 16) |
-		(uint32(m.memory[ptePhysAddr+3]) << 24)
-
-	pte := DecodePTE(pteValue)
-
-	// Check if PTE is present
-	if !pte.Present {
-		m.SetPageFaultAddress(va)
-		return emptyPTE, &core.FaultError{Code: core.EXC_PAGE_FAULT, Msg: "PAGE_FAULT: PAGE TABLE ENTRY NOT PRESENT"}
-	}
-
-	return pte, nil
+	return m.mmu.PageTableWalk(va, m.GetPageDirectoryBase(), m.memory, m.SetPageFaultAddress)
 }
 
 // CR2 helper functions

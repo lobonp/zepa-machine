@@ -46,6 +46,7 @@ type Segment struct {
 type MMU struct {
 	Mode     MMUMode
 	Segments [NumSegments]Segment
+	tlb      *TLB
 }
 
 func (m *MMU) Translate(virtualAddress uint32, access AccessType, currentPriv Privilege) (uint32, error) {
@@ -100,4 +101,75 @@ func (m *MMU) Translate(virtualAddress uint32, access AccessType, currentPriv Pr
 	}
 
 	return physicalAddress, err
+}
+
+func (m *MMU) ensureTLB() {
+	if m.tlb == nil {
+		m.tlb = NewTLB(DefaultTLBSize)
+	}
+}
+
+func (m *MMU) TranslateWithPaging(va uint32, pageDirectoryBase uint32, memory []byte, setPageFaultAddress func(uint32)) (uint32, error) {
+	m.ensureTLB()
+
+	if entry, found := m.tlb.Lookup(va); found {
+		offset := ExtractPageOffset(va)
+		return MakePhysicalAddress(entry.PhysicalFrame, offset), nil
+	}
+
+	pte, err := m.PageTableWalk(va, pageDirectoryBase, memory, setPageFaultAddress)
+	if err != nil {
+		return 0, err
+	}
+
+	// Cache translated page in TLB for later accesses.
+	m.tlb.Insert(va, pte)
+	offset := ExtractPageOffset(va)
+
+	return MakePhysicalAddress(pte.BaseAddress, offset), nil
+}
+
+func (m *MMU) PageTableWalk(va uint32, pageDirectoryBase uint32, memory []byte, setPageFaultAddress func(uint32)) (PageTableEntry, error) {
+	var emptyPTE PageTableEntry
+
+	pdIndex := ExtractPDIndex(va)
+	ptIndex := ExtractPTIndex(va)
+	pdePhysAddr := pageDirectoryBase + (pdIndex * 4)
+
+	if pdePhysAddr+3 >= uint32(len(memory)) {
+		setPageFaultAddress(va)
+		return emptyPTE, &core.FaultError{Code: core.EXC_PAGE_FAULT, Msg: "PAGE_FAULT: PAGE DIRECTORY ACCESS OUT OF BOUNDS"}
+	}
+
+	pdeValue := uint32(memory[pdePhysAddr]) |
+		(uint32(memory[pdePhysAddr+1]) << 8) |
+		(uint32(memory[pdePhysAddr+2]) << 16) |
+		(uint32(memory[pdePhysAddr+3]) << 24)
+
+	pde := DecodePDE(pdeValue)
+	if !pde.Present {
+		setPageFaultAddress(va)
+		return emptyPTE, &core.FaultError{Code: core.EXC_PAGE_FAULT, Msg: "PAGE_FAULT: PAGE DIRECTORY ENTRY NOT PRESENT"}
+	}
+
+	ptBase := pde.BaseAddress
+	ptePhysAddr := ptBase + (ptIndex * 4)
+
+	if ptePhysAddr+3 >= uint32(len(memory)) {
+		setPageFaultAddress(va)
+		return emptyPTE, &core.FaultError{Code: core.EXC_PAGE_FAULT, Msg: "PAGE_FAULT: PAGE TABLE ACCESS OUT OF BOUNDS"}
+	}
+
+	pteValue := uint32(memory[ptePhysAddr]) |
+		(uint32(memory[ptePhysAddr+1]) << 8) |
+		(uint32(memory[ptePhysAddr+2]) << 16) |
+		(uint32(memory[ptePhysAddr+3]) << 24)
+
+	pte := DecodePTE(pteValue)
+	if !pte.Present {
+		setPageFaultAddress(va)
+		return emptyPTE, &core.FaultError{Code: core.EXC_PAGE_FAULT, Msg: "PAGE_FAULT: PAGE TABLE ENTRY NOT PRESENT"}
+	}
+
+	return pte, nil
 }
