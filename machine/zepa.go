@@ -66,6 +66,7 @@ type Machine struct {
 	tlb                *TLB
 	privMode           Privilege
 	userMemoryLimit    uint32
+	inException        bool
 }
 
 func (m *Machine) InitDisk() {
@@ -217,8 +218,6 @@ func (m *Machine) handleFault(err error) bool {
 }
 
 func (m *Machine) memoryAccessFault(addr uint32, isWrite bool) error {
-	_ = isWrite
-
 	if addr >= uint32(len(m.memory)) {
 		return &core.FaultError{Code: core.EXC_MEMORY_VIOLATION, Msg: "MEMORY_VIOLATION: ADDRESS OUT OF RANGE"}
 	}
@@ -226,6 +225,17 @@ func (m *Machine) memoryAccessFault(addr uint32, isWrite bool) error {
 	// Keep exception handlers and register backup area as privileged memory (only enforce in user mode).
 	if m.privMode == UserPrivilege && addr >= m.userMemoryLimit {
 		return &core.FaultError{Code: core.EXC_PROTECTION_FAULT, Msg: "PROTECTION_FAULT: PRIVILEGED MEMORY"}
+	}
+
+	if isWrite && m.IsWriteProtectEnabled() {
+		if !m.IsPagingEnabled() && m.mmu.Mode == ModeSegmented {
+			segID := addr >> SegmentShift
+			if segID < uint32(len(m.mmu.Segments)) {
+				if m.mmu.Segments[segID].Protection&Write == 0 {
+					return &core.FaultError{Code: core.EXC_PROTECTION_FAULT, Msg: "PROTECTION_FAULT: WRITE PROTECTED"}
+				}
+			}
+		}
 	}
 
 	return nil
@@ -424,6 +434,13 @@ func NewMachine(memoryBytes int) *Machine {
 func (m *Machine) exception(code uint32) {
 	fmt.Printf("Exception raised: Code %d\n", code)
 
+	if m.inException {
+		fmt.Printf("Double fault (code %d during handler) – halting\n", code)
+		m.halted = true
+		return
+	}
+	m.inException = true
+
 	// Save W registers into memory as little-endian uint32 (4 bytes each).
 	base := len(m.memory) - wRegisterSaveAreaBytes
 	for i, reg := range []core.Register{core.W0, core.W1, core.W2, core.W3, core.W4, core.W5} {
@@ -452,7 +469,7 @@ func (m *Machine) halt(inst Instruction) {
 func (m *Machine) ret(inst Instruction) {
 	// Restore values
 	m.registers[core.PC] = m.registers[core.LR]
-	m.registers[core.SSR] = m.registers[core.SR]
+	m.registers[core.SR] = m.registers[core.SSR]
 
 	// Restore W registers from little-endian uint32 (4 bytes each).
 	base := len(m.memory) - wRegisterSaveAreaBytes
@@ -463,8 +480,9 @@ func (m *Machine) ret(inst Instruction) {
 			uint32(m.memory[base+i*4+3])<<24
 	}
 
-	// Reset link register
+	// Reset link register and clear exception flag.
 	m.registers[core.LR] = 0
+	m.inException = false
 }
 
 func (m *Machine) udf(inst Instruction) {

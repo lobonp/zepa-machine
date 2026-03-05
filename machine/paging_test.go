@@ -604,3 +604,53 @@ func TestLoadStoreWithPagingEnabled(t *testing.T) {
 		t.Fatalf("store via paging got %d want 99", m.memory[storePA])
 	}
 }
+
+func TestSegmentationAndPagingCombined(t *testing.T) {
+	// Use a large memory so segmentation translates to valid physical ranges
+	// that can then be used as virtual addresses for paging.
+	m := NewMachine(65536)
+	m.mmu.Mode = ModeSegmented
+	m.EnablePaging()
+
+	// Segment 0: Base=0, Limit=4096, R|X, Kernel
+	// A VA in segment 0 with offset 0x100 produces segmented addr = 0 + 0x100 = 0x100.
+	// That segmented address is then used as the virtual address for paging.
+
+	pdBase := uint32(0x5000)
+	ptBase := uint32(0x6000)
+	frame := uint32(0x7000)
+
+	m.SetPageDirectoryBase(pdBase)
+
+	// Map the page that contains the segmented address 0x100 → frame 0x7000.
+	pdIndex := ExtractPDIndex(0x100)
+	ptIndex := ExtractPTIndex(0x100)
+
+	pde := EncodePDE(PageDirectoryEntry{
+		Present:     true,
+		ReadWrite:   true,
+		BaseAddress: ptBase,
+	})
+	writeUint32LE(m.memory, pdBase+(pdIndex*4), pde)
+
+	pte := EncodePTE(PageTableEntry{
+		Present:     true,
+		ReadWrite:   true,
+		BaseAddress: frame,
+	})
+	writeUint32LE(m.memory, ptBase+(ptIndex*4), pte)
+
+	// Place test data at the physical frame.
+	offset := ExtractPageOffset(0x100)
+	m.memory[frame+offset] = 0xAB
+
+	// LOAD from VA 0x100 (segment 0, offset 0x100):
+	//   Segmentation: 0 + 0x100 = 0x100
+	//   Paging: 0x100 → frame 0x7000 + offset 0x100 = 0x7100
+	inst := Instruction{opcode: (*Machine).load, rd: core.W1, immediate: 0x100}
+	m.execute(inst)
+
+	if m.registers[core.W1] != 0xAB {
+		t.Fatalf("segmentation+paging LOAD: got 0x%X, want 0xAB", m.registers[core.W1])
+	}
+}

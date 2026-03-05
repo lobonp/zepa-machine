@@ -390,3 +390,120 @@ func TestProtectionFaultException(t *testing.T) {
 		t.Errorf("Expected: %s, got %s", expected, got)
 	}
 }
+
+func TestRetRestoresSR(t *testing.T) {
+	machine := NewMachine(2048)
+	machine.mmu.Mode = ModeFlat
+
+	// Set a known SR value before the exception.
+	machine.registers[core.SR] = 42
+
+	old := os.Stdout
+	_, w, _ := os.Pipe()
+	os.Stdout = w
+
+	// Trigger an exception — this saves SR into SSR and resets SR via handler.
+	machine.exception(core.EXC_UNDEFINED)
+
+	w.Close()
+	os.Stdout = old
+
+	// SR was saved in SSR.
+	if machine.registers[core.SSR] != 42 {
+		t.Fatalf("Expected SSR=42 after exception, got %d", machine.registers[core.SSR])
+	}
+
+	// Change SR to something else (simulating handler work).
+	machine.registers[core.SR] = 0
+
+	// RET should restore SR from SSR.
+	machine.ret(Instruction{})
+
+	if machine.registers[core.SR] != 42 {
+		t.Fatalf("Expected SR=42 after RET, got %d", machine.registers[core.SR])
+	}
+}
+
+func TestDoubleFaultHaltsMachine(t *testing.T) {
+	machine := NewMachine(2048)
+	machine.mmu.Mode = ModeFlat
+
+	old := os.Stdout
+	_, w, _ := os.Pipe()
+	os.Stdout = w
+
+	// First exception: should succeed normally.
+	machine.exception(core.EXC_UNDEFINED)
+	if machine.halted {
+		t.Fatal("Machine should not halt on first exception")
+	}
+
+	// Second exception while still inside handler (inException == true):
+	// should trigger double fault and halt.
+	machine.exception(core.EXC_PAGE_FAULT)
+
+	w.Close()
+	os.Stdout = old
+
+	if !machine.halted {
+		t.Fatal("Expected machine to halt on double fault")
+	}
+}
+
+func TestRetClearsInExceptionFlag(t *testing.T) {
+	machine := NewMachine(2048)
+	machine.mmu.Mode = ModeFlat
+
+	old := os.Stdout
+	_, w, _ := os.Pipe()
+	os.Stdout = w
+
+	machine.exception(core.EXC_UNDEFINED)
+	if !machine.inException {
+		t.Fatal("Expected inException=true after exception")
+	}
+
+	machine.ret(Instruction{})
+	if machine.inException {
+		t.Fatal("Expected inException=false after RET")
+	}
+
+	// A new exception after RET should work, not double-fault.
+	machine.exception(core.EXC_UNDEFINED)
+	if machine.halted {
+		t.Fatal("Machine should not halt on exception after RET cleared flag")
+	}
+
+	w.Close()
+	os.Stdout = old
+}
+
+func TestWriteProtectEnforced(t *testing.T) {
+	machine := NewMachine(65536)
+	machine.mmu.Mode = ModeFlat
+	machine.EnableWriteProtect()
+	machine.mmu.Mode = ModeSegmented
+
+	// Segment 0 is Read|Execute only — writing should fail with WP enabled.
+	machine.registers[core.W1] = 65
+	inst := Instruction{opcode: (*Machine).store, rd: core.W1, immediate: 100}
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	machine.execute(inst)
+
+	w.Close()
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+	got := buf.String()
+
+	// Should raise a protection fault (code 4) because segment 0 has no Write permission.
+	expected := "Exception raised: Code 4\n"
+	if got != expected {
+		t.Errorf("Expected: %s, got %s", expected, got)
+	}
+}
