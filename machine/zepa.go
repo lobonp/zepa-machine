@@ -450,6 +450,10 @@ func (m *Machine) udf(inst Instruction) {
 }
 
 func (m *Machine) translate(va uint32, access AccessType, priv Privilege) (uint32, error) {
+	if access == Execute && va >= m.userMemoryLimit && va < uint32(len(m.memory)) {
+		return va, nil
+	}
+
 	segmentedAddress, err := m.mmu.Translate(va, access, priv)
 	if err != nil {
 		return 0, err
