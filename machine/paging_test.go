@@ -1,6 +1,9 @@
 package machine
 
-import "testing"
+import (
+	"testing"
+	"zepa-machine/core"
+)
 
 func TestPDERoundTrip(t *testing.T) {
 	in := PageDirectoryEntry{
@@ -425,5 +428,114 @@ func TestTranslateAddressPreservesFlags(t *testing.T) {
 	}
 	if !tlbEntry.Dirty {
 		t.Fatal("expected Dirty=true in TLB")
+	}
+}
+
+func writeUint32LE(memory []byte, addr uint32, value uint32) {
+	memory[addr] = byte(value)
+	memory[addr+1] = byte(value >> 8)
+	memory[addr+2] = byte(value >> 16)
+	memory[addr+3] = byte(value >> 24)
+}
+
+func mapPage(t *testing.T, m *Machine, pdBase uint32, ptBase uint32, va uint32, frame uint32) {
+	t.Helper()
+
+	if !IsPageAligned(pdBase) || !IsPageAligned(ptBase) || !IsPageAligned(frame) {
+		t.Fatalf("pdBase, ptBase and frame must be page-aligned")
+	}
+
+	m.SetPageDirectoryBase(pdBase)
+
+	pdIndex := ExtractPDIndex(va)
+	ptIndex := ExtractPTIndex(va)
+
+	pde := EncodePDE(PageDirectoryEntry{
+		Present:     true,
+		ReadWrite:   true,
+		BaseAddress: ptBase,
+	})
+	pdeAddr := pdBase + (pdIndex * 4)
+	writeUint32LE(m.memory, pdeAddr, pde)
+
+	pte := EncodePTE(PageTableEntry{
+		Present:     true,
+		ReadWrite:   true,
+		BaseAddress: frame,
+	})
+	pteAddr := ptBase + (ptIndex * 4)
+	writeUint32LE(m.memory, pteAddr, pte)
+}
+
+func TestTranslateUsesPagingWhenEnabled(t *testing.T) {
+	m := NewMachine(65536)
+	m.mmu.Mode = ModeFlat
+	m.EnablePaging()
+
+	va := uint32(0x00000123)
+	frame := uint32(0x00004000)
+	mapPage(t, m, 0x00001000, 0x00002000, va, frame)
+
+	pa, err := m.translate(va, Read, m.privMode)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if want := uint32(0x00004123); pa != want {
+		t.Fatalf("translate with paging got 0x%X want 0x%X", pa, want)
+	}
+
+	if m.tlb.Size() != 1 {
+		t.Fatalf("expected TLB size 1, got %d", m.tlb.Size())
+	}
+}
+
+func TestTranslateBypassesPagingWhenDisabled(t *testing.T) {
+	m := NewMachine(65536)
+	m.mmu.Mode = ModeFlat
+
+	va := uint32(0x00000123)
+	pa, err := m.translate(va, Read, m.privMode)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if pa != va {
+		t.Fatalf("translate without paging got 0x%X want 0x%X", pa, va)
+	}
+}
+
+func TestLoadStoreWithPagingEnabled(t *testing.T) {
+	m := NewMachine(65536)
+	m.mmu.Mode = ModeFlat
+	m.EnablePaging()
+
+	pdBase := uint32(0x00001000)
+	ptBase := uint32(0x00002000)
+
+	loadVA := uint32(0x00000100)
+	loadFrame := uint32(0x00003000)
+	mapPage(t, m, pdBase, ptBase, loadVA, loadFrame)
+
+	storeVA := uint32(0x00001204)
+	storeFrame := uint32(0x00004000)
+	mapPage(t, m, pdBase, ptBase, storeVA, storeFrame)
+
+	loadPA := MakePhysicalAddress(loadFrame, ExtractPageOffset(loadVA))
+	m.memory[loadPA] = 77
+
+	loadInst := Instruction{opcode: (*Machine).load, rd: core.W1, immediate: uint16(loadVA)}
+	m.execute(loadInst)
+	if m.registers[core.W1] != 77 {
+		t.Fatalf("load via paging got %d want 77", m.registers[core.W1])
+	}
+
+	m.registers[core.W2] = 99
+	storeInst := Instruction{opcode: (*Machine).store, rd: core.W2, immediate: uint16(storeVA)}
+	m.execute(storeInst)
+
+	storePA := MakePhysicalAddress(storeFrame, ExtractPageOffset(storeVA))
+	if m.memory[storePA] != 99 {
+		t.Fatalf("store via paging got %d want 99", m.memory[storePA])
 	}
 }

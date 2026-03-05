@@ -445,7 +445,16 @@ func (m *Machine) udf(inst Instruction) {
 }
 
 func (m *Machine) translate(va uint32, access AccessType, priv Privilege) (uint32, error) {
-	return m.mmu.Translate(va, access, priv)
+	segmentedAddress, err := m.mmu.Translate(va, access, priv)
+	if err != nil {
+		return 0, err
+	}
+
+	if !m.IsPagingEnabled() {
+		return segmentedAddress, nil
+	}
+
+	return m.TranslateAddress(segmentedAddress)
 }
 
 // CR0 helper functions
@@ -504,6 +513,10 @@ func (m *Machine) EnablePGE() {
 }
 
 func (m *Machine) TranslateAddress(va uint32) (uint32, error) {
+	if m.tlb == nil {
+		m.tlb = NewTLB(DefaultTLBSize)
+	}
+
 	if entry, found := m.tlb.Lookup(va); found {
 		offset := ExtractPageOffset(va)
 		pa := MakePhysicalAddress(entry.PhysicalFrame, offset)
@@ -535,9 +548,9 @@ func (m *Machine) PageTableWalk(va uint32) (PageTableEntry, error) {
 	pdBase := m.GetPageDirectoryBase()
 	pdePhysAddr := pdBase + (pdIndex * 4)
 
-	if pdePhysAddr >= uint32(len(m.memory)) {
+	if pdePhysAddr+3 >= uint32(len(m.memory)) {
 		m.SetPageFaultAddress(va)
-		return emptyPTE, fmt.Errorf("page directory access out of bounds at 0x%X", pdePhysAddr)
+		return emptyPTE, &core.FaultError{Code: core.EXC_PAGE_FAULT, Msg: "PAGE_FAULT: PAGE DIRECTORY ACCESS OUT OF BOUNDS"}
 	}
 
 	pdeValue := uint32(m.memory[pdePhysAddr]) |
@@ -550,16 +563,16 @@ func (m *Machine) PageTableWalk(va uint32) (PageTableEntry, error) {
 	// Check if PDE is present
 	if !pde.Present {
 		m.SetPageFaultAddress(va)
-		return emptyPTE, fmt.Errorf("page directory entry not present at index %d", pdIndex)
+		return emptyPTE, &core.FaultError{Code: core.EXC_PAGE_FAULT, Msg: "PAGE_FAULT: PAGE DIRECTORY ENTRY NOT PRESENT"}
 	}
 
 	// Read Page Table Entry
 	ptBase := pde.BaseAddress
 	ptePhysAddr := ptBase + (ptIndex * 4)
 
-	if ptePhysAddr >= uint32(len(m.memory)) {
+	if ptePhysAddr+3 >= uint32(len(m.memory)) {
 		m.SetPageFaultAddress(va)
-		return emptyPTE, fmt.Errorf("page table access out of bounds at 0x%X", ptePhysAddr)
+		return emptyPTE, &core.FaultError{Code: core.EXC_PAGE_FAULT, Msg: "PAGE_FAULT: PAGE TABLE ACCESS OUT OF BOUNDS"}
 	}
 
 	pteValue := uint32(m.memory[ptePhysAddr]) |
@@ -572,7 +585,7 @@ func (m *Machine) PageTableWalk(va uint32) (PageTableEntry, error) {
 	// Check if PTE is present
 	if !pte.Present {
 		m.SetPageFaultAddress(va)
-		return emptyPTE, fmt.Errorf("page table entry not present at index %d", ptIndex)
+		return emptyPTE, &core.FaultError{Code: core.EXC_PAGE_FAULT, Msg: "PAGE_FAULT: PAGE TABLE ENTRY NOT PRESENT"}
 	}
 
 	return pte, nil
