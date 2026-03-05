@@ -88,9 +88,17 @@ func getRegisterName(reg core.Register) string {
 	case 12:
 		return "lr"
 	case 13:
-		return "evt"
-	case 14:
 		return "ssr"
+	case 14:
+		return "cr0"
+	case 15:
+		return "cr2"
+	case 16:
+		return "cr3"
+	case 17:
+		return "cr4"
+	case 18:
+		return "eflags"
 	default:
 		return "invalid"
 	}
