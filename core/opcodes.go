@@ -35,22 +35,22 @@ const (
 )
 
 const (
-	// Define opcodes for different instructions
-	MV_OPCODE Opcode = iota
-	ADD_OPCODE
-	SUB_OPCODE
-	CMP_OPCODE
-	JUMP_OPCODE
-	LOAD_OPCODE
-	STORE_OPCODE
-	FETCH_OPCODE
-	HALT_OPCODE
-	RET_OPCODE
-	BEQ_OPCODE
-	BLT_OPCODE
-	BGT_OPCODE
-	UDF_OPCODE
-	DISK2MEM_OPCODE Opcode = 28
+	// Define opcodes for different instructions (matching ISA specification)
+	MV_OPCODE       Opcode = 14 // 001110
+	ADD_OPCODE      Opcode = 15 // 001111
+	SUB_OPCODE      Opcode = 16 // 010000
+	CMP_OPCODE      Opcode = 17 // 010001
+	JUMP_OPCODE     Opcode = 18 // 010010
+	LOAD_OPCODE     Opcode = 19 // 010011
+	STORE_OPCODE    Opcode = 20 // 010100
+	FETCH_OPCODE    Opcode = 21 // 010101
+	HALT_OPCODE     Opcode = 22 // 010110
+	RET_OPCODE      Opcode = 23 // 010111
+	BEQ_OPCODE      Opcode = 24 // 011000
+	BLT_OPCODE      Opcode = 25 // 011001
+	BGT_OPCODE      Opcode = 26 // 011010
+	UDF_OPCODE      Opcode = 27 // 011011
+	DISK2MEM_OPCODE Opcode = 28 // 011100
 )
 
 const (
