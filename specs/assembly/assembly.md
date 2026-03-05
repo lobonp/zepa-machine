@@ -5,6 +5,12 @@ This document defines the assembly programming language for the instructions of 
 
 ## Syntax
 
+### Registers
+The assembler accepts both general-purpose and special/control registers:
+
+- General-purpose: `W0`, `W1`, `W2`, `W3`, `W4`, `W5`
+- Special/control: `PC`, `SP`, `IR`, `SR`, `MDR`, `MAR`, `LR`, `SSR`, `CR0`, `CR2`, `CR3`, `CR4`, `EFLAGS`
+
 ### General Syntax
 The general syntax follows the structure:
 

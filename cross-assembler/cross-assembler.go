@@ -18,6 +18,19 @@ var RegisterMap = map[string]core.Register{
 	"W3": core.W3,
 	"W4": core.W4,
 	"W5": core.W5,
+	"PC": core.PC,
+	"SP": core.SP,
+	"IR": core.IR,
+	"SR": core.SR,
+	"MDR": core.MDR,
+	"MAR": core.MAR,
+	"LR": core.LR,
+	"SSR": core.SSR,
+	"CR0": core.CR0,
+	"CR2": core.CR2,
+	"CR3": core.CR3,
+	"CR4": core.CR4,
+	"EFLAGS": core.EFLAGS,
 }
 
 // Map instruction names to Opcode values

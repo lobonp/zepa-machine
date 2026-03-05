@@ -298,7 +298,7 @@ func TestTranslateValid(t *testing.T) {
 func TestTranslateInvalidLimit(t *testing.T) {
 	machine := NewMachine(2048)
 	machine.mmu.Mode = ModeSegmented
-	_, err := machine.translate(3000, Read, KernelPrivilege)
+	_, err := machine.translate(0x4000, Read, KernelPrivilege)
 	if err == nil {
 		t.Error("Expected error for limit violation")
 	}
@@ -314,7 +314,7 @@ func TestFetchWithMMU(t *testing.T) {
 func TestLoadWithSegmentationFault(t *testing.T) {
 	machine := NewMachine(2048)
 	machine.mmu.Mode = ModeSegmented
-	inst := Instruction{opcode: (*Machine).load, rd: core.W1, immediate: 3000}
+	inst := Instruction{opcode: (*Machine).load, rd: core.W1, immediate: 0x4000}
 
 	old := os.Stdout
 	r, w, _ := os.Pipe()
@@ -338,7 +338,8 @@ func TestLoadWithSegmentationFault(t *testing.T) {
 
 func TestPageFaultException(t *testing.T) {
 	machine := NewMachine(2048)
-	machine.setPageMapped(1, false)
+	machine.mmu.Mode = ModeFlat
+	machine.setPageMapped(0, false)
 	inst := Instruction{opcode: (*Machine).load, immediate: 0x100}
 
 	// Get default exit
