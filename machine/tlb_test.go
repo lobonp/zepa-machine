@@ -279,3 +279,41 @@ func TestTLBGlobalFlag(t *testing.T) {
 		t.Fatal("expected local entry with Global=false")
 	}
 }
+
+func TestTLBFIFOAfterFlushPage(t *testing.T) {
+	tlb := NewTLB(3)
+
+	pte := PageTableEntry{Present: true, BaseAddress: 0x10000000}
+
+	// Initial FIFO order: A, B, C
+	addrA := uint32(0x01000000)
+	addrB := uint32(0x02000000)
+	addrC := uint32(0x03000000)
+	tlb.Insert(addrA, pte)
+	tlb.Insert(addrB, pte)
+	tlb.Insert(addrC, pte)
+
+	// Remove middle entry (B). Remaining oldest should still be A.
+	tlb.FlushPage(addrB)
+
+	// Insert D. TLB is not full yet.
+	addrD := uint32(0x04000000)
+	tlb.Insert(addrD, pte)
+
+	// Insert E. TLB is full; FIFO must evict A (oldest remaining).
+	addrE := uint32(0x05000000)
+	tlb.Insert(addrE, pte)
+
+	if _, found := tlb.Lookup(addrA); found {
+		t.Fatal("expected A to be evicted as oldest entry")
+	}
+	if _, found := tlb.Lookup(addrC); !found {
+		t.Fatal("expected C to remain")
+	}
+	if _, found := tlb.Lookup(addrD); !found {
+		t.Fatal("expected D to remain")
+	}
+	if _, found := tlb.Lookup(addrE); !found {
+		t.Fatal("expected E to be present")
+	}
+}

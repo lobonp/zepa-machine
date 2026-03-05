@@ -5,19 +5,20 @@ const (
 )
 
 type TLBEntry struct {
-	VirtualPage   uint32
-	PhysicalFrame uint32
-	Present       bool
-	ReadWrite     bool
+	VirtualPage    uint32
+	PhysicalFrame  uint32
+	Present        bool
+	ReadWrite      bool
 	UserSupervisor bool
-	Dirty         bool
-	Global        bool
+	Dirty          bool
+	Global         bool
+	fifoOrder      uint64
 }
 
 type TLB struct {
-	entries  []TLBEntry
-	size     int
-	nextSlot int
+	entries    []TLBEntry
+	size       int
+	nextInsert uint64
 }
 
 func NewTLB(size int) *TLB {
@@ -25,9 +26,9 @@ func NewTLB(size int) *TLB {
 		size = DefaultTLBSize
 	}
 	return &TLB{
-		entries:  make([]TLBEntry, 0, size),
-		size:     size,
-		nextSlot: 0,
+		entries:    make([]TLBEntry, 0, size),
+		size:       size,
+		nextInsert: 0,
 	}
 }
 
@@ -48,6 +49,7 @@ func (tlb *TLB) Insert(virtualAddr uint32, pte PageTableEntry) {
 
 	for i := range tlb.entries {
 		if tlb.entries[i].VirtualPage == virtualPage {
+			fifoOrder := tlb.entries[i].fifoOrder
 			tlb.entries[i] = TLBEntry{
 				VirtualPage:    virtualPage,
 				PhysicalFrame:  pte.BaseAddress,
@@ -56,6 +58,7 @@ func (tlb *TLB) Insert(virtualAddr uint32, pte PageTableEntry) {
 				UserSupervisor: pte.UserSupervisor,
 				Dirty:          pte.Dirty,
 				Global:         pte.Global,
+				fifoOrder:      fifoOrder,
 			}
 			return
 		}
@@ -69,22 +72,29 @@ func (tlb *TLB) Insert(virtualAddr uint32, pte PageTableEntry) {
 		UserSupervisor: pte.UserSupervisor,
 		Dirty:          pte.Dirty,
 		Global:         pte.Global,
+		fifoOrder:      tlb.nextInsert,
 	}
+	tlb.nextInsert++
 
 	// If TLB is not full, append
 	if len(tlb.entries) < tlb.size {
 		tlb.entries = append(tlb.entries, entry)
 	} else {
-		// Replace using FIFO policy
-		tlb.entries[tlb.nextSlot] = entry
-		tlb.nextSlot = (tlb.nextSlot + 1) % tlb.size
+		// Replace oldest entry (FIFO).
+		oldestIdx := 0
+		for i := 1; i < len(tlb.entries); i++ {
+			if tlb.entries[i].fifoOrder < tlb.entries[oldestIdx].fifoOrder {
+				oldestIdx = i
+			}
+		}
+		tlb.entries[oldestIdx] = entry
 	}
 }
 
 // Flush clears all entries in the TLB.
 func (tlb *TLB) Flush() {
 	tlb.entries = make([]TLBEntry, 0, tlb.size)
-	tlb.nextSlot = 0
+	tlb.nextInsert = 0
 }
 
 // FlushPage removes a specific virtual page from the TLB.
@@ -93,15 +103,9 @@ func (tlb *TLB) FlushPage(virtualAddr uint32) {
 
 	for i := 0; i < len(tlb.entries); i++ {
 		if tlb.entries[i].VirtualPage == virtualPage {
-			// Remove entry by swapping with last and truncating
-			lastIdx := len(tlb.entries) - 1
-			tlb.entries[i] = tlb.entries[lastIdx]
-			tlb.entries = tlb.entries[:lastIdx]
-			
-			// Adjust nextSlot if needed
-			if tlb.nextSlot > 0 {
-				tlb.nextSlot--
-			}
+			// Remove entry while preserving order for deterministic behavior.
+			copy(tlb.entries[i:], tlb.entries[i+1:])
+			tlb.entries = tlb.entries[:len(tlb.entries)-1]
 			return
 		}
 	}
