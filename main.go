@@ -55,7 +55,18 @@ func DebugRegisters(m *machine.Machine) {
 		if k == 8 {
 			continue
 		}
-		fmt.Printf("%v: %d\n", getRegisterName(k), v)
+		fmt.Printf("%v: %s\n", getRegisterName(k), formatRegisterValue(k, v))
+	}
+}
+
+func formatRegisterValue(reg core.Register, value uint32) string {
+	switch reg {
+	case core.CR0, core.CR2, core.CR3, core.CR4, core.EFLAGS:
+		return fmt.Sprintf("0x%08X (0b%032b)", value, value)
+	case core.SR:
+		return fmt.Sprintf("0b%032b (%d)", value, value)
+	default:
+		return fmt.Sprintf("%d", value)
 	}
 }
 
