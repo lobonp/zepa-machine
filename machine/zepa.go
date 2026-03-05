@@ -189,8 +189,8 @@ func (m *Machine) memoryAccessFault(addr uint32, isWrite bool) error {
 		return &core.FaultError{Code: core.EXC_MEMORY_VIOLATION, Msg: "MEMORY_VIOLATION: ADDRESS OUT OF RANGE"}
 	}
 
-	// Keep exception handlers and register backup area as privileged memory.
-	if addr >= m.userMemoryLimit {
+	// Keep exception handlers and register backup area as privileged memory (only enforce in user mode).
+	if m.privMode == UserPrivilege && addr >= m.userMemoryLimit {
 		return &core.FaultError{Code: core.EXC_PROTECTION_FAULT, Msg: "PROTECTION_FAULT: PRIVILEGED MEMORY"}
 	}
 
@@ -364,7 +364,7 @@ func NewMachine(memoryBytes int) *Machine {
 		mmu: &MMU{
 			Mode: ModeSegmented,
 			Segments: [NumSegments]Segment{
-				{Base: 0, Limit: 2048, GrowsPositive: true, Protection: Read | Execute, Priv: KernelPrivilege},
+				{Base: 0, Limit: 2048 + uint32(exceptionHandlerSize), GrowsPositive: true, Protection: Read | Execute, Priv: KernelPrivilege},
 				{Base: 2048, Limit: 2048, GrowsPositive: true, Protection: Read | Write, Priv: UserPrivilege},
 				{Base: 4096, Limit: 2048, GrowsPositive: false, Protection: Read | Write, Priv: UserPrivilege},
 				{Base: 6144, Limit: 2048, GrowsPositive: true, Protection: Read | Write, Priv: KernelPrivilege},
@@ -395,6 +395,9 @@ func NewMachine(memoryBytes int) *Machine {
 	machine.registers[core.CR3] = 0
 	machine.registers[core.CR4] = 0
 	machine.registers[core.EFLAGS] = 0
+
+	// Update userMemoryLimit to protect handler area from user code
+	machine.userMemoryLimit = handlerAddress
 
 	return machine
 }
