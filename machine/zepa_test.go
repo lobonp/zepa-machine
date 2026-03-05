@@ -5,6 +5,8 @@ import (
 	"os"
 	"testing"
 	"zepa-machine/core"
+
+	assembler "zepa-machine/cross-assembler"
 )
 
 func TestFetch(t *testing.T) {
@@ -535,5 +537,69 @@ func TestMVCR3FlushTLB(t *testing.T) {
 	// CR3 must be updated with the new page directory base.
 	if got := m.GetPageDirectoryBase(); got != 0x2000 {
 		t.Fatalf("expected CR3=0x2000, got 0x%X", got)
+	}
+}
+
+func TestLOADR(t *testing.T) {
+	m := NewMachine(65536)
+	m.mmu.Mode = ModeFlat
+
+	// Write a sentinel value at address 0xA000 (> 0xFFFF if 32-bit, fits in 65536).
+	targetAddr := uint32(0xA000)
+	m.memory[targetAddr] = 0xBE
+
+	// Set rs1 = W2 to the target address.
+	m.registers[core.W2] = targetAddr
+
+	inst := Instruction{opcode: (*Machine).loadr, rd: core.W1, rs1: core.W2}
+	m.execute(inst)
+
+	if m.registers[core.W1] != 0xBE {
+		t.Fatalf("LOADR: expected W1=0xBE, got 0x%X", m.registers[core.W1])
+	}
+}
+
+func TestSTORER(t *testing.T) {
+	m := NewMachine(65536)
+	m.mmu.Mode = ModeFlat
+
+	targetAddr := uint32(0xB000)
+	m.registers[core.W0] = 0xCA
+	m.registers[core.W3] = targetAddr
+
+	inst := Instruction{opcode: (*Machine).storer, rd: core.W0, rs1: core.W3}
+	m.execute(inst)
+
+	if m.memory[targetAddr] != 0xCA {
+		t.Fatalf("STORER: expected memory[0xB000]=0xCA, got 0x%X", m.memory[targetAddr])
+	}
+}
+
+func TestLOADRAssembler(t *testing.T) {
+	m := NewMachine(65536)
+	m.mmu.Mode = ModeFlat
+
+	// Place data at address 0xC042.
+	targetAddr := uint32(0xC042)
+	m.memory[targetAddr] = 0x77
+
+	// Build a small program:
+	//   MV  W1, #0xC042   ; W1 = 0xC042 (address)
+	//   LOADR W2, W1      ; W2 = memory[W1]
+	//   HALT
+	program, err := assembler.ConvertInstructionsToBinary([][]string{
+		{"MV", "W1", "#0xC042"},
+		{"LOADR", "W2", "W1"},
+		{"HALT"},
+	})
+	if err != nil {
+		t.Fatalf("assembly failed: %v", err)
+	}
+
+	m.LoadProgram(program)
+	m.Boot()
+
+	if m.registers[core.W2] != 0x77 {
+		t.Fatalf("LOADR end-to-end: expected W2=0x77, got 0x%X", m.registers[core.W2])
 	}
 }

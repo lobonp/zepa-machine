@@ -15,12 +15,10 @@ func TestTLBHitAndMiss(t *testing.T) {
 		Global:         false,
 	}
 
-	// Miss on empty TLB
 	if _, found := tlb.Lookup(virtualAddr); found {
 		t.Fatal("expected TLB miss on empty TLB")
 	}
 
-	// Insert and hit
 	tlb.Insert(virtualAddr, pte)
 	entry, found := tlb.Lookup(virtualAddr)
 	if !found {
@@ -33,7 +31,6 @@ func TestTLBHitAndMiss(t *testing.T) {
 		t.Fatal("ReadWrite flag mismatch")
 	}
 
-	// Miss on different address
 	if _, found := tlb.Lookup(0x99999000); found {
 		t.Fatal("expected TLB miss on different address")
 	}

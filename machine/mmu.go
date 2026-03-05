@@ -143,7 +143,7 @@ func (m *MMU) persistDirtyBit(va uint32, pageDirectoryBase uint32, memory []byte
 		(uint32(memory[ptePhysAddr+3]) << 24)
 	pte := DecodePTE(pteValue)
 	if !pte.Present || pte.Dirty {
-		return // already set or not mapped
+		return
 	}
 
 	pte.Dirty = true
@@ -182,7 +182,6 @@ func (m *MMU) TranslateWithPaging(va uint32, access AccessType, currentPriv Priv
 		return 0, &core.FaultError{Code: core.EXC_PROTECTION_FAULT, Msg: "PROTECTION_FAULT: PAGE IS READ-ONLY"}
 	}
 
-	// Cache translated page in TLB for later accesses.
 	m.tlb.Insert(va, pte)
 	offset := ExtractPageOffset(va)
 

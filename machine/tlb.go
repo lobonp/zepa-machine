@@ -76,11 +76,10 @@ func (tlb *TLB) Insert(virtualAddr uint32, pte PageTableEntry) {
 	}
 	tlb.nextInsert++
 
-	// If TLB is not full, append
 	if len(tlb.entries) < tlb.size {
 		tlb.entries = append(tlb.entries, entry)
 	} else {
-		// Replace oldest entry (FIFO).
+		// FIFO
 		oldestIdx := 0
 		for i := 1; i < len(tlb.entries); i++ {
 			if tlb.entries[i].fifoOrder < tlb.entries[oldestIdx].fifoOrder {
@@ -91,19 +90,16 @@ func (tlb *TLB) Insert(virtualAddr uint32, pte PageTableEntry) {
 	}
 }
 
-// Flush clears all entries in the TLB.
 func (tlb *TLB) Flush() {
 	tlb.entries = make([]TLBEntry, 0, tlb.size)
 	tlb.nextInsert = 0
 }
 
-// FlushPage removes a specific virtual page from the TLB.
 func (tlb *TLB) FlushPage(virtualAddr uint32) {
 	virtualPage := virtualAddr & FrameAddressMask
 
 	for i := 0; i < len(tlb.entries); i++ {
 		if tlb.entries[i].VirtualPage == virtualPage {
-			// Remove entry while preserving order for deterministic behavior.
 			copy(tlb.entries[i:], tlb.entries[i+1:])
 			tlb.entries = tlb.entries[:len(tlb.entries)-1]
 			return
@@ -121,7 +117,6 @@ func (tlb *TLB) SetDirty(virtualAddr uint32) {
 	}
 }
 
-// Size returns the current number of entries in the TLB.
 func (tlb *TLB) Size() int {
 	return len(tlb.entries)
 }

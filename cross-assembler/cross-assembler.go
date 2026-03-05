@@ -12,43 +12,45 @@ import (
 
 // Map register names to Register values
 var RegisterMap = map[string]core.Register{
-	"W0": core.W0,
-	"W1": core.W1,
-	"W2": core.W2,
-	"W3": core.W3,
-	"W4": core.W4,
-	"W5": core.W5,
-	"PC": core.PC,
-	"SP": core.SP,
-	"IR": core.IR,
-	"SR": core.SR,
-	"MDR": core.MDR,
-	"MAR": core.MAR,
-	"LR": core.LR,
-	"SSR": core.SSR,
-	"CR0": core.CR0,
-	"CR2": core.CR2,
-	"CR3": core.CR3,
-	"CR4": core.CR4,
+	"W0":     core.W0,
+	"W1":     core.W1,
+	"W2":     core.W2,
+	"W3":     core.W3,
+	"W4":     core.W4,
+	"W5":     core.W5,
+	"PC":     core.PC,
+	"SP":     core.SP,
+	"IR":     core.IR,
+	"SR":     core.SR,
+	"MDR":    core.MDR,
+	"MAR":    core.MAR,
+	"LR":     core.LR,
+	"SSR":    core.SSR,
+	"CR0":    core.CR0,
+	"CR2":    core.CR2,
+	"CR3":    core.CR3,
+	"CR4":    core.CR4,
 	"EFLAGS": core.EFLAGS,
 }
 
 // Map instruction names to Opcode values
 var opcodeMap = map[string]core.Opcode{
-	"ADD":   core.ADD_OPCODE,
-	"SUB":   core.SUB_OPCODE,
-	"CMP":   core.CMP_OPCODE,
-	"MV":    core.MV_OPCODE,
-	"JUMP":  core.JUMP_OPCODE,
-	"LOAD":  core.LOAD_OPCODE,
-	"STORE": core.STORE_OPCODE,
-	"HALT":  core.HALT_OPCODE,
-	"RET":   core.RET_OPCODE,
-	"BEQ":   core.BEQ_OPCODE,
-	"BLT":   core.BLT_OPCODE,
-	"BGT":   core.BGT_OPCODE,
-	"UDF":   core.UDF_OPCODE,
-	"D2M":   core.DISK2MEM_OPCODE,
+	"ADD":    core.ADD_OPCODE,
+	"SUB":    core.SUB_OPCODE,
+	"CMP":    core.CMP_OPCODE,
+	"MV":     core.MV_OPCODE,
+	"JUMP":   core.JUMP_OPCODE,
+	"LOAD":   core.LOAD_OPCODE,
+	"STORE":  core.STORE_OPCODE,
+	"HALT":   core.HALT_OPCODE,
+	"RET":    core.RET_OPCODE,
+	"BEQ":    core.BEQ_OPCODE,
+	"BLT":    core.BLT_OPCODE,
+	"BGT":    core.BGT_OPCODE,
+	"UDF":    core.UDF_OPCODE,
+	"D2M":    core.DISK2MEM_OPCODE,
+	"LOADR":  core.LOADR_OPCODE,
+	"STORER": core.STORER_OPCODE,
 }
 
 // Define instruction format and function codes for each type
@@ -74,6 +76,8 @@ var instructionSpecs = map[core.Opcode]InstructionSpec{
 	core.ADD_OPCODE:      newInstructionSpec("R-Type", core.ADD_OPCODE),
 	core.SUB_OPCODE:      newInstructionSpec("R-Type", core.SUB_OPCODE),
 	core.CMP_OPCODE:      newInstructionSpec("R-Type", core.CMP_OPCODE),
+	core.LOADR_OPCODE:    newInstructionSpec("R-Type-LD", core.LOADR_OPCODE),
+	core.STORER_OPCODE:   newInstructionSpec("R-Type-LD", core.STORER_OPCODE),
 	core.MV_OPCODE:       newInstructionSpec("I-Type", core.MV_OPCODE),
 	core.JUMP_OPCODE:     newInstructionSpec("I-Type", core.JUMP_OPCODE),
 	core.LOAD_OPCODE:     newInstructionSpec("I-Type", core.LOAD_OPCODE),
@@ -229,10 +233,11 @@ func ConvertInstructionToBinary(instruction []string) ([]byte, error) {
 	var binaryInstruction uint32
 	var err error
 
-	// Encode the instruction based on its format (R-Type or I-Type)
 	switch spec.Format {
 	case "R-Type":
 		binaryInstruction, err = encodeRType(spec, instruction[1:])
+	case "R-Type-LD":
+		binaryInstruction, err = encodeRTypeLD(spec, instruction[1:])
 	case "I-Type":
 		binaryInstruction, err = encodeIType(spec, instruction[1:])
 	default:
@@ -252,6 +257,25 @@ func ConvertInstructionToBinary(instruction []string) ([]byte, error) {
 	}
 
 	return bytes, nil
+}
+
+func encodeRTypeLD(spec InstructionSpec, operands []string) (uint32, error) {
+	if len(operands) != 2 {
+		return 0, fmt.Errorf("LOADR/STORER expects exactly 2 operands (rd, rs1), got %d", len(operands))
+	}
+	rd, err := parseRegister(operands[0])
+	if err != nil {
+		return 0, err
+	}
+	rs1, err := parseRegister(operands[1])
+	if err != nil {
+		return 0, err
+	}
+	binaryInstruction := uint32(spec.Opcode&core.OpCodeBitMask) << OPCODE_SHIFT
+	binaryInstruction |= uint32(rd&core.RegisterBitMask) << RD_SHIFT_R
+	binaryInstruction |= uint32(rs1&core.RegisterBitMask) << RS1_SHIFT_R
+
+	return binaryInstruction, nil
 }
 
 func encodeRType(spec InstructionSpec, operands []string) (uint32, error) {

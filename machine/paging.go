@@ -11,13 +11,12 @@ const (
 	PDIndexShift uint32 = 22
 	PTIndexShift uint32 = 12
 
-	PageOffsetMask  uint32 = 0x00000FFF
-	PDIndexMask     uint32 = 0x3FF
-	PTIndexMask     uint32 = 0x3FF
+	PageOffsetMask   uint32 = 0x00000FFF
+	PDIndexMask      uint32 = 0x3FF
+	PTIndexMask      uint32 = 0x3FF
 	FrameAddressMask uint32 = 0xFFFFF000
 )
 
-// PageDirectoryEntry defines a single PDE for 32-bit paging.
 type PageDirectoryEntry struct {
 	Present        bool
 	ReadWrite      bool
@@ -32,7 +31,6 @@ type PageDirectoryEntry struct {
 	BaseAddress    uint32
 }
 
-// PageTableEntry defines a single PTE for 32-bit paging.
 type PageTableEntry struct {
 	Present        bool
 	ReadWrite      bool

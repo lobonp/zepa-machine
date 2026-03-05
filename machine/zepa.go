@@ -40,6 +40,8 @@ var operations = map[byte]Operation{
 	byte(core.BGT_OPCODE):      (*Machine).bgt,
 	byte(core.UDF_OPCODE):      (*Machine).udf,
 	byte(core.DISK2MEM_OPCODE): (*Machine).d2m,
+	byte(core.LOADR_OPCODE):    (*Machine).loadr,
+	byte(core.STORER_OPCODE):   (*Machine).storer,
 }
 
 type Instruction struct {
@@ -206,6 +208,30 @@ func (m *Machine) store(inst Instruction) {
 	m.memory[physical] = byte(m.registers[inst.rd])
 }
 
+func (m *Machine) loadr(inst Instruction) {
+	addr := m.registers[inst.rs1]
+	physical, err := m.translate(addr, Read, m.privMode)
+	if m.handleFault(err) {
+		return
+	}
+	if m.handleFault(m.memoryAccessFault(physical, false)) {
+		return
+	}
+	m.registers[inst.rd] = uint32(m.memory[physical])
+}
+
+func (m *Machine) storer(inst Instruction) {
+	addr := m.registers[inst.rs1]
+	physical, err := m.translate(addr, Write, m.privMode)
+	if m.handleFault(err) {
+		return
+	}
+	if m.handleFault(m.memoryAccessFault(physical, true)) {
+		return
+	}
+	m.memory[physical] = byte(m.registers[inst.rd])
+}
+
 func (m *Machine) handleFault(err error) bool {
 	if err == nil {
 		return false
@@ -338,7 +364,8 @@ func (m *Machine) decode() Instruction {
 	opcode := m.getOpcode(instruction)
 
 	switch opcode {
-	case core.ADD_OPCODE, core.SUB_OPCODE, core.CMP_OPCODE:
+	case core.ADD_OPCODE, core.SUB_OPCODE, core.CMP_OPCODE,
+		core.LOADR_OPCODE, core.STORER_OPCODE:
 		return m.decodeRTypeInst(instruction)
 	case core.MV_OPCODE, core.JUMP_OPCODE, core.LOAD_OPCODE, core.STORE_OPCODE,
 		core.HALT_OPCODE, core.RET_OPCODE, core.BEQ_OPCODE, core.BGT_OPCODE, core.BLT_OPCODE, core.UDF_OPCODE:
@@ -415,7 +442,7 @@ func NewMachine(memoryBytes int) *Machine {
 		},
 		tlb:             tlb,
 		privMode:        KernelPrivilege,
-		userMemoryLimit: uint32(memoryBytes), // W-backup area starts here
+		userMemoryLimit: uint32(memoryBytes),
 	}
 
 	machine.evt[core.EXC_UNDEFINED] = handlerCodePA
@@ -445,7 +472,6 @@ func (m *Machine) exception(code uint32) {
 	}
 	m.inException = true
 
-	// Save W registers into memory as little-endian uint32 (4 bytes each).
 	base := len(m.memory) - wRegisterSaveAreaBytes
 	for i, reg := range []core.Register{core.W0, core.W1, core.W2, core.W3, core.W4, core.W5} {
 		v := m.registers[reg]
@@ -455,27 +481,19 @@ func (m *Machine) exception(code uint32) {
 		m.memory[base+i*4+3] = byte(v >> 24)
 	}
 
-	// Save information
 	m.registers[core.LR] = m.registers[core.PC]
 	m.registers[core.SSR] = m.registers[core.SR]
-
-	// Redirect to exception handler.
-	// Handlers live in the kernel code segment (Seg0) and are always
-	// reachable via normal segmentation, just like real hardware.
 	m.registers[core.PC] = m.evt[code]
 }
 
 func (m *Machine) halt(inst Instruction) {
-	// Set halted flag instead of exiting
 	m.halted = true
 }
 
 func (m *Machine) ret(inst Instruction) {
-	// Restore values
 	m.registers[core.PC] = m.registers[core.LR]
 	m.registers[core.SR] = m.registers[core.SSR]
 
-	// Restore W registers from little-endian uint32 (4 bytes each).
 	if m.inException {
 		base := len(m.memory) - wRegisterSaveAreaBytes
 		for i, reg := range []core.Register{core.W0, core.W1, core.W2, core.W3, core.W4, core.W5} {
@@ -487,7 +505,6 @@ func (m *Machine) ret(inst Instruction) {
 		m.inException = false
 	}
 
-	// Reset link register and clear exception flag.
 	m.registers[core.LR] = 0
 }
 
@@ -508,7 +525,6 @@ func (m *Machine) translate(va uint32, access AccessType, priv Privilege) (uint3
 	return m.mmu.TranslateWithPaging(segmentedAddress, access, priv, m.GetPageDirectoryBase(), m.memory, m.SetPageFaultAddress)
 }
 
-// CR0 helper functions
 func (m *Machine) IsPagingEnabled() bool {
 	return (m.registers[core.CR0] & core.CR0_PG) != 0
 }
@@ -537,7 +553,6 @@ func (m *Machine) EnableWriteProtect() {
 	m.registers[core.CR0] |= core.CR0_WP
 }
 
-// CR3 helper functions
 func (m *Machine) GetPageDirectoryBase() uint32 {
 	return m.registers[core.CR3] & core.CR3_PDBR_MASK
 }
@@ -547,7 +562,6 @@ func (m *Machine) SetPageDirectoryBase(physAddr uint32) {
 	m.mmu.tlb.Flush()
 }
 
-// CR4 helper functions
 func (m *Machine) IsPSEEnabled() bool {
 	return (m.registers[core.CR4] & core.CR4_PSE) != 0
 }
@@ -572,7 +586,6 @@ func (m *Machine) PageTableWalk(va uint32, access AccessType) (PageTableEntry, e
 	return m.mmu.PageTableWalk(va, access, m.privMode, m.GetPageDirectoryBase(), m.memory, m.SetPageFaultAddress)
 }
 
-// CR2 helper functions
 func (m *Machine) SetPageFaultAddress(addr uint32) {
 	m.registers[core.CR2] = addr
 }
@@ -581,7 +594,6 @@ func (m *Machine) GetPageFaultAddress() uint32 {
 	return m.registers[core.CR2]
 }
 
-// EFLAGS helper functions
 func (m *Machine) AreInterruptsEnabled() bool {
 	return (m.registers[core.EFLAGS] & core.EFLAGS_IF) != 0
 }

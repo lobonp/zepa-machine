@@ -51,6 +51,8 @@ const (
 	BGT_OPCODE      Opcode = 26 // 011010
 	UDF_OPCODE      Opcode = 27 // 011011
 	DISK2MEM_OPCODE Opcode = 28 // 011100
+	LOADR_OPCODE    Opcode = 29 // 011101 – Load via register address
+	STORER_OPCODE   Opcode = 30 // 011110 – Store via register address
 )
 
 const (
