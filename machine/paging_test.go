@@ -121,7 +121,7 @@ func TestPageTableWalkSuccess(t *testing.T) {
 
 	// Perform page table walk
 	va := uint32(0x00000000)
-	returnedPTE, err := m.PageTableWalk(va)
+	returnedPTE, err := m.PageTableWalk(va, Read)
 
 	if err != nil {
 		t.Fatalf("expected successful page table walk, got error: %v", err)
@@ -155,7 +155,7 @@ func TestPageTableWalkPDENotPresent(t *testing.T) {
 	m.memory[pdBase+3] = byte(pdeValue >> 24)
 
 	va := uint32(0x00000000)
-	_, err := m.PageTableWalk(va)
+	_, err := m.PageTableWalk(va, Read)
 
 	if err == nil {
 		t.Fatal("expected page fault for non-present PDE")
@@ -199,7 +199,7 @@ func TestPageTableWalkPTENotPresent(t *testing.T) {
 	m.memory[ptBase+3] = byte(pteValue >> 24)
 
 	va := uint32(0x00000000)
-	_, err := m.PageTableWalk(va)
+	_, err := m.PageTableWalk(va, Read)
 
 	if err == nil {
 		t.Fatal("expected page fault for non-present PTE")

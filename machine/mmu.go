@@ -130,7 +130,7 @@ func (m *MMU) TranslateWithPaging(va uint32, access AccessType, currentPriv Priv
 		return MakePhysicalAddress(entry.PhysicalFrame, offset), nil
 	}
 
-	pte, err := m.PageTableWalk(va, currentPriv, pageDirectoryBase, memory, setPageFaultAddress)
+	pte, err := m.PageTableWalk(va, access, currentPriv, pageDirectoryBase, memory, setPageFaultAddress)
 	if err != nil {
 		return 0, err
 	}
@@ -146,7 +146,7 @@ func (m *MMU) TranslateWithPaging(va uint32, access AccessType, currentPriv Priv
 	return MakePhysicalAddress(pte.BaseAddress, offset), nil
 }
 
-func (m *MMU) PageTableWalk(va uint32, currentPriv Privilege, pageDirectoryBase uint32, memory []byte, setPageFaultAddress func(uint32)) (PageTableEntry, error) {
+func (m *MMU) PageTableWalk(va uint32, access AccessType, currentPriv Privilege, pageDirectoryBase uint32, memory []byte, setPageFaultAddress func(uint32)) (PageTableEntry, error) {
 	var emptyPTE PageTableEntry
 
 	pdIndex := ExtractPDIndex(va)
@@ -194,6 +194,28 @@ func (m *MMU) PageTableWalk(va uint32, currentPriv Privilege, pageDirectoryBase 
 
 	if currentPriv == UserPrivilege && !pte.UserSupervisor {
 		return emptyPTE, &core.FaultError{Code: core.EXC_PROTECTION_FAULT, Msg: "PROTECTION_FAULT: USER ACCESS TO KERNEL PAGE"}
+	}
+
+	if !pde.Accessed {
+		pde.Accessed = true
+		encodedPDE := EncodePDE(pde)
+		memory[pdePhysAddr] = byte(encodedPDE)
+		memory[pdePhysAddr+1] = byte(encodedPDE >> 8)
+		memory[pdePhysAddr+2] = byte(encodedPDE >> 16)
+		memory[pdePhysAddr+3] = byte(encodedPDE >> 24)
+	}
+
+	needsUpdate := !pte.Accessed || (access&Write != 0 && !pte.Dirty)
+	if needsUpdate {
+		pte.Accessed = true
+		if access&Write != 0 {
+			pte.Dirty = true
+		}
+		encodedPTE := EncodePTE(pte)
+		memory[ptePhysAddr] = byte(encodedPTE)
+		memory[ptePhysAddr+1] = byte(encodedPTE >> 8)
+		memory[ptePhysAddr+2] = byte(encodedPTE >> 16)
+		memory[ptePhysAddr+3] = byte(encodedPTE >> 24)
 	}
 
 	return pte, nil

@@ -57,16 +57,16 @@ type Disk struct {
 }
 
 type Machine struct {
-	memory             []byte
-	registers          map[core.Register]uint32
-	evt                map[uint32]uint32
-	disk               Disk
-	halted             bool
-	mmu                *MMU
-	tlb                *TLB
-	privMode           Privilege
-	userMemoryLimit    uint32
-	inException        bool
+	memory          []byte
+	registers       map[core.Register]uint32
+	evt             map[uint32]uint32
+	disk            Disk
+	halted          bool
+	mmu             *MMU
+	tlb             *TLB
+	privMode        Privilege
+	userMemoryLimit uint32
+	inException     bool
 }
 
 func (m *Machine) InitDisk() {
@@ -409,9 +409,9 @@ func NewMachine(memoryBytes int) *Machine {
 			},
 			tlb: tlb,
 		},
-		tlb:                tlb,
-		privMode:           KernelPrivilege,
-		userMemoryLimit:    uint32(memoryBytes), // W-backup area starts here
+		tlb:             tlb,
+		privMode:        KernelPrivilege,
+		userMemoryLimit: uint32(memoryBytes), // W-backup area starts here
 	}
 
 	machine.evt[core.EXC_UNDEFINED] = handlerCodePA
@@ -472,17 +472,19 @@ func (m *Machine) ret(inst Instruction) {
 	m.registers[core.SR] = m.registers[core.SSR]
 
 	// Restore W registers from little-endian uint32 (4 bytes each).
-	base := len(m.memory) - wRegisterSaveAreaBytes
-	for i, reg := range []core.Register{core.W0, core.W1, core.W2, core.W3, core.W4, core.W5} {
-		m.registers[reg] = uint32(m.memory[base+i*4]) |
-			uint32(m.memory[base+i*4+1])<<8 |
-			uint32(m.memory[base+i*4+2])<<16 |
-			uint32(m.memory[base+i*4+3])<<24
+	if m.inException {
+		base := len(m.memory) - wRegisterSaveAreaBytes
+		for i, reg := range []core.Register{core.W0, core.W1, core.W2, core.W3, core.W4, core.W5} {
+			m.registers[reg] = uint32(m.memory[base+i*4]) |
+				uint32(m.memory[base+i*4+1])<<8 |
+				uint32(m.memory[base+i*4+2])<<16 |
+				uint32(m.memory[base+i*4+3])<<24
+		}
+		m.inException = false
 	}
 
 	// Reset link register and clear exception flag.
 	m.registers[core.LR] = 0
-	m.inException = false
 }
 
 func (m *Machine) udf(inst Instruction) {
@@ -495,7 +497,7 @@ func (m *Machine) translate(va uint32, access AccessType, priv Privilege) (uint3
 		return 0, err
 	}
 
-	if !m.IsPagingEnabled() {
+	if !m.IsPagingEnabled() || m.inException {
 		return segmentedAddress, nil
 	}
 
@@ -538,6 +540,7 @@ func (m *Machine) GetPageDirectoryBase() uint32 {
 
 func (m *Machine) SetPageDirectoryBase(physAddr uint32) {
 	m.registers[core.CR3] = physAddr & core.CR3_PDBR_MASK
+	m.mmu.tlb.Flush()
 }
 
 // CR4 helper functions
@@ -561,8 +564,8 @@ func (m *Machine) TranslateAddress(va uint32) (uint32, error) {
 	return m.mmu.TranslateWithPaging(va, Read, m.privMode, m.GetPageDirectoryBase(), m.memory, m.SetPageFaultAddress)
 }
 
-func (m *Machine) PageTableWalk(va uint32) (PageTableEntry, error) {
-	return m.mmu.PageTableWalk(va, m.privMode, m.GetPageDirectoryBase(), m.memory, m.SetPageFaultAddress)
+func (m *Machine) PageTableWalk(va uint32, access AccessType) (PageTableEntry, error) {
+	return m.mmu.PageTableWalk(va, access, m.privMode, m.GetPageDirectoryBase(), m.memory, m.SetPageFaultAddress)
 }
 
 // CR2 helper functions
