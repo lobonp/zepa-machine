@@ -654,3 +654,76 @@ func TestSegmentationAndPagingCombined(t *testing.T) {
 		t.Fatalf("segmentation+paging LOAD: got 0x%X, want 0xAB", m.registers[core.W1])
 	}
 }
+
+func TestDirtyBitPersistOnTLBHitWrite(t *testing.T) {
+	m := NewMachine(65536)
+	m.mmu.Mode = ModeFlat
+	m.EnablePaging()
+
+	pdBase := uint32(0x1000)
+	ptBase := uint32(0x2000)
+	pageFrame := uint32(0x3000)
+	m.SetPageDirectoryBase(pdBase)
+
+	// Build PDE and PTE (Dirty=0 initially).
+	pde := PageDirectoryEntry{Present: true, ReadWrite: true, BaseAddress: ptBase}
+	pdeValue := EncodePDE(pde)
+	m.memory[pdBase] = byte(pdeValue)
+	m.memory[pdBase+1] = byte(pdeValue >> 8)
+	m.memory[pdBase+2] = byte(pdeValue >> 16)
+	m.memory[pdBase+3] = byte(pdeValue >> 24)
+
+	pte := PageTableEntry{Present: true, ReadWrite: true, BaseAddress: pageFrame, Dirty: false}
+	pteValue := EncodePTE(pte)
+	ptePhysAddr := ptBase // ptIndex=0 for VA 0x0
+	m.memory[ptePhysAddr] = byte(pteValue)
+	m.memory[ptePhysAddr+1] = byte(pteValue >> 8)
+	m.memory[ptePhysAddr+2] = byte(pteValue >> 16)
+	m.memory[ptePhysAddr+3] = byte(pteValue >> 24)
+
+	va := uint32(0x0000)
+
+	// First write: TLB miss → PageTableWalk sets Dirty in memory and caches entry.
+	_, err := m.mmu.TranslateWithPaging(va, Write, KernelPrivilege, pdBase, m.memory, m.SetPageFaultAddress)
+	if err != nil {
+		t.Fatalf("first write (TLB miss) failed: %v", err)
+	}
+
+	// Reset Dirty bit in memory to simulate a page that was swapped out and
+	// reloaded with Dirty=0, while the TLB entry still has Dirty=false.
+	pte2 := PageTableEntry{Present: true, ReadWrite: true, BaseAddress: pageFrame, Dirty: false}
+	pteValue2 := EncodePTE(pte2)
+	m.memory[ptePhysAddr] = byte(pteValue2)
+	m.memory[ptePhysAddr+1] = byte(pteValue2 >> 8)
+	m.memory[ptePhysAddr+2] = byte(pteValue2 >> 16)
+	m.memory[ptePhysAddr+3] = byte(pteValue2 >> 24)
+
+	// Force TLB to hold entry with Dirty=false.
+	m.tlb.Flush()
+	m.tlb.Insert(va, PageTableEntry{Present: true, ReadWrite: true, BaseAddress: pageFrame, Dirty: false})
+
+	// Second write: TLB hit → must set Dirty in TLB and in PTE in memory.
+	_, err = m.mmu.TranslateWithPaging(va, Write, KernelPrivilege, pdBase, m.memory, m.SetPageFaultAddress)
+	if err != nil {
+		t.Fatalf("second write (TLB hit) failed: %v", err)
+	}
+
+	// Verify Dirty bit is set in the TLB entry.
+	tlbEntry, found := m.tlb.Lookup(va)
+	if !found {
+		t.Fatal("expected TLB entry to be present after write")
+	}
+	if !tlbEntry.Dirty {
+		t.Fatal("TLB entry: expected Dirty=true after write TLB hit")
+	}
+
+	// Verify Dirty bit is also persisted in the PTE in physical memory.
+	rawPTE := uint32(m.memory[ptePhysAddr]) |
+		uint32(m.memory[ptePhysAddr+1])<<8 |
+		uint32(m.memory[ptePhysAddr+2])<<16 |
+		uint32(m.memory[ptePhysAddr+3])<<24
+	persistedPTE := DecodePTE(rawPTE)
+	if !persistedPTE.Dirty {
+		t.Fatal("PTE in memory: expected Dirty=true after write TLB hit")
+	}
+}

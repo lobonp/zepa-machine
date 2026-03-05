@@ -111,6 +111,16 @@ func (tlb *TLB) FlushPage(virtualAddr uint32) {
 	}
 }
 
+func (tlb *TLB) SetDirty(virtualAddr uint32) {
+	virtualPage := virtualAddr & FrameAddressMask
+	for i := range tlb.entries {
+		if tlb.entries[i].VirtualPage == virtualPage {
+			tlb.entries[i].Dirty = true
+			return
+		}
+	}
+}
+
 // Size returns the current number of entries in the TLB.
 func (tlb *TLB) Size() int {
 	return len(tlb.entries)

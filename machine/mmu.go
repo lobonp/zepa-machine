@@ -116,6 +116,44 @@ func (m *MMU) ensureTLB() {
 	}
 }
 
+func (m *MMU) persistDirtyBit(va uint32, pageDirectoryBase uint32, memory []byte) {
+	pdIndex := ExtractPDIndex(va)
+	ptIndex := ExtractPTIndex(va)
+	pdePhysAddr := pageDirectoryBase + (pdIndex * 4)
+
+	if pdePhysAddr+3 >= uint32(len(memory)) {
+		return
+	}
+	pdeValue := uint32(memory[pdePhysAddr]) |
+		(uint32(memory[pdePhysAddr+1]) << 8) |
+		(uint32(memory[pdePhysAddr+2]) << 16) |
+		(uint32(memory[pdePhysAddr+3]) << 24)
+	pde := DecodePDE(pdeValue)
+	if !pde.Present {
+		return
+	}
+
+	ptePhysAddr := pde.BaseAddress + (ptIndex * 4)
+	if ptePhysAddr+3 >= uint32(len(memory)) {
+		return
+	}
+	pteValue := uint32(memory[ptePhysAddr]) |
+		(uint32(memory[ptePhysAddr+1]) << 8) |
+		(uint32(memory[ptePhysAddr+2]) << 16) |
+		(uint32(memory[ptePhysAddr+3]) << 24)
+	pte := DecodePTE(pteValue)
+	if !pte.Present || pte.Dirty {
+		return // already set or not mapped
+	}
+
+	pte.Dirty = true
+	encoded := EncodePTE(pte)
+	memory[ptePhysAddr] = byte(encoded)
+	memory[ptePhysAddr+1] = byte(encoded >> 8)
+	memory[ptePhysAddr+2] = byte(encoded >> 16)
+	memory[ptePhysAddr+3] = byte(encoded >> 24)
+}
+
 func (m *MMU) TranslateWithPaging(va uint32, access AccessType, currentPriv Privilege, pageDirectoryBase uint32, memory []byte, setPageFaultAddress func(uint32)) (uint32, error) {
 	m.ensureTLB()
 
@@ -125,6 +163,11 @@ func (m *MMU) TranslateWithPaging(va uint32, access AccessType, currentPriv Priv
 		}
 		if access&Write != 0 && !entry.ReadWrite {
 			return 0, &core.FaultError{Code: core.EXC_PROTECTION_FAULT, Msg: "PROTECTION_FAULT: PAGE IS READ-ONLY"}
+		}
+
+		if access&Write != 0 && !entry.Dirty {
+			m.tlb.SetDirty(va)
+			m.persistDirtyBit(va, pageDirectoryBase, memory)
 		}
 		offset := ExtractPageOffset(va)
 		return MakePhysicalAddress(entry.PhysicalFrame, offset), nil
