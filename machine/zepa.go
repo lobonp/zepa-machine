@@ -405,7 +405,7 @@ func (m *Machine) GetRegisters() map[core.Register]uint32 {
 func NewMachine(memoryBytes int) *Machine {
 	handlerCode, err := assembler.ConvertInstructionsToBinary([][]string{
 		{"HALT"}, // offset +0 : Default Handler
-		{"RET"},  // offset +4 : Memory / Page / Protection Fault Handler
+		{"HALT"}, // offset +4 : Memory / Page / Protection Fault Handler
 		{"RET"},  // offset +8 : Segmentation Fault Handler
 	})
 	if err != nil {
@@ -434,7 +434,7 @@ func NewMachine(memoryBytes int) *Machine {
 			MemorySize: uint32(machineMemory),
 			Segments: [NumSegments]Segment{
 				{Base: 0, Limit: uint32(MaxSegmentSize), GrowsPositive: true, Protection: Read | Execute, Priv: KernelPrivilege},
-				{Base: 16384, Limit: 16384, GrowsPositive: true, Protection: Read | Write, Priv: UserPrivilege},
+				{Base: 16384, Limit: 16384, GrowsPositive: true, Protection: Read | Write | Execute, Priv: UserPrivilege},
 				{Base: 49152, Limit: 16384, GrowsPositive: false, Protection: Read | Write, Priv: UserPrivilege},
 				{Base: 32768, Limit: 16384, GrowsPositive: true, Protection: Read | Write, Priv: KernelPrivilege},
 			},
