@@ -507,3 +507,33 @@ func TestWriteProtectEnforced(t *testing.T) {
 		t.Errorf("Expected: %s, got %s", expected, got)
 	}
 }
+
+func TestMVCR3FlushTLB(t *testing.T) {
+	m := NewMachine(65536)
+
+	// Manually insert a TLB entry to simulate a cached translation.
+	pte := PageTableEntry{
+		Present:     true,
+		ReadWrite:   true,
+		BaseAddress: 0x5000,
+	}
+	m.tlb.Insert(0x1000, pte)
+
+	if m.tlb.Size() != 1 {
+		t.Fatalf("precondition: expected 1 TLB entry, got %d", m.tlb.Size())
+	}
+
+	// Execute MV CR3, #0x2000 — must flush the TLB.
+	inst := Instruction{opcode: (*Machine).mv, rd: core.CR3, immediate: 0x2000}
+	m.execute(inst)
+
+	// TLB must be empty after CR3 change.
+	if m.tlb.Size() != 0 {
+		t.Fatalf("expected TLB to be flushed after MV CR3, got %d entries", m.tlb.Size())
+	}
+
+	// CR3 must be updated with the new page directory base.
+	if got := m.GetPageDirectoryBase(); got != 0x2000 {
+		t.Fatalf("expected CR3=0x2000, got 0x%X", got)
+	}
+}

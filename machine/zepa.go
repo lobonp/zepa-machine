@@ -122,6 +122,10 @@ func (m *Machine) d2m(inst Instruction) {
 }
 
 func (m *Machine) mv(inst Instruction) {
+	if inst.rd == core.CR3 {
+		m.SetPageDirectoryBase(uint32(inst.immediate))
+		return
+	}
 	m.registers[inst.rd] = uint32(inst.immediate)
 }
 
