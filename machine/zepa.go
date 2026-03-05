@@ -340,23 +340,25 @@ func (m *Machine) GetRegisters() map[core.Register]uint32 {
 }
 
 func NewMachine(memoryBytes int) *Machine {
-	// Define exception handler code
 	handlerCode, err := assembler.ConvertInstructionsToBinary([][]string{
-		{"HALT"}, // M + 0 : Default Handler
-		{"RET"},  // M + 4 : Memory Violation Handler
-		{"RET"},  // M + 8 : Segmentation Fault Handler
+		{"HALT"}, // offset +0 : Default Handler
+		{"RET"},  // offset +4 : Memory / Page / Protection Fault Handler
+		{"RET"},  // offset +8 : Segmentation Fault Handler
 	})
 	if err != nil {
 		fmt.Printf("%v\n", err)
 	}
 
-	// Setting space to exception handler and W registers backup
+	segLimit := memoryBytes
+	if segLimit > MaxSegmentSize {
+		segLimit = MaxSegmentSize
+	}
+	handlerCodePA := uint32(segLimit) - uint32(len(handlerCode))
+
 	qntRegisters := len(assembler.RegisterMap)
-	exceptionHandlerSize := len(handlerCode) + qntRegisters
-	machineMemory := memoryBytes + exceptionHandlerSize
+	machineMemory := memoryBytes + qntRegisters
 	tlb := NewTLB(DefaultTLBSize)
 
-	// Define the machine
 	machine := &Machine{
 		memory:    make([]byte, machineMemory),
 		registers: make(map[core.Register]uint32),
@@ -365,7 +367,7 @@ func NewMachine(memoryBytes int) *Machine {
 		mmu: &MMU{
 			Mode: ModeSegmented,
 			Segments: [NumSegments]Segment{
-				{Base: 0, Limit: 16384 + uint32(exceptionHandlerSize), GrowsPositive: true, Protection: Read | Execute, Priv: KernelPrivilege},
+				{Base: 0, Limit: uint32(MaxSegmentSize), GrowsPositive: true, Protection: Read | Execute, Priv: KernelPrivilege},
 				{Base: 16384, Limit: 16384, GrowsPositive: true, Protection: Read | Write, Priv: UserPrivilege},
 				{Base: 49152, Limit: 16384, GrowsPositive: false, Protection: Read | Write, Priv: UserPrivilege},
 				{Base: 32768, Limit: 16384, GrowsPositive: true, Protection: Read | Write, Priv: KernelPrivilege},
@@ -373,33 +375,26 @@ func NewMachine(memoryBytes int) *Machine {
 			tlb: tlb,
 		},
 		tlb:                tlb,
-		privMode:           KernelPrivilege, // Inicia em kernel mode
-		userMemoryLimit:    uint32(memoryBytes),
+		privMode:           KernelPrivilege,
+		userMemoryLimit:    uint32(memoryBytes), // W-backup area starts here
 		pageSize:           4096,
 		unmappedPages:      make(map[uint32]bool),
 		writeProtectedPage: make(map[uint32]bool),
 	}
 
-	handlerAddress := uint32(machineMemory - exceptionHandlerSize) // Set handler address
+	machine.evt[core.EXC_UNDEFINED] = handlerCodePA
+	machine.evt[core.EXC_MEMORY_VIOLATION] = handlerCodePA + 4
+	machine.evt[core.EXC_SEGMENTATION_FAULT] = handlerCodePA + 8
+	machine.evt[core.EXC_PAGE_FAULT] = handlerCodePA + 4
+	machine.evt[core.EXC_PROTECTION_FAULT] = handlerCodePA + 4
 
-	machine.evt[core.EXC_UNDEFINED] = uint32(memoryBytes)              // Default handler location
-	machine.evt[core.EXC_MEMORY_VIOLATION] = uint32(memoryBytes + 4)   // Set memoty violation handler location
-	machine.evt[core.EXC_SEGMENTATION_FAULT] = uint32(memoryBytes + 8) // Set segmentation fault handler location
-	machine.evt[core.EXC_PAGE_FAULT] = uint32(memoryBytes + 4)         // Set page fault handler location
-	machine.evt[core.EXC_PROTECTION_FAULT] = uint32(memoryBytes + 4)   // Set protection fault handler location
+	copy(machine.memory[handlerCodePA:], handlerCode)
 
-	// Load exception handler to memory
-	copy(machine.memory[handlerAddress:], handlerCode)
-
-	// Initialize control registers
 	machine.registers[core.CR0] = 0
 	machine.registers[core.CR2] = 0
 	machine.registers[core.CR3] = 0
 	machine.registers[core.CR4] = 0
 	machine.registers[core.EFLAGS] = 0
-
-	// Update userMemoryLimit to protect handler area from user code
-	machine.userMemoryLimit = handlerAddress
 
 	return machine
 }
@@ -419,7 +414,9 @@ func (m *Machine) exception(code uint32) {
 	m.registers[core.LR] = m.registers[core.PC]
 	m.registers[core.SSR] = m.registers[core.SR]
 
-	// Redirect to exception Handler
+	// Redirect to exception handler.
+	// Handlers live in the kernel code segment (Seg0) and are always
+	// reachable via normal segmentation, just like real hardware.
 	m.registers[core.PC] = m.evt[code]
 }
 
@@ -450,10 +447,6 @@ func (m *Machine) udf(inst Instruction) {
 }
 
 func (m *Machine) translate(va uint32, access AccessType, priv Privilege) (uint32, error) {
-	if access == Execute && va >= m.userMemoryLimit && va < uint32(len(m.memory)) {
-		return va, nil
-	}
-
 	segmentedAddress, err := m.mmu.Translate(va, access, priv)
 	if err != nil {
 		return 0, err
