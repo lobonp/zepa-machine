@@ -177,6 +177,20 @@ The processor uses exception codes to index the Exception Vector Table (EVT) and
 - **Format**: I-Type
 - **Opcode (decimal)**: 28
 
+**LOADR**:
+- **Description**: Loads the byte at the memory address stored in a source register into a destination register. Unlike LOAD, the address is a full 32-bit register value, enabling access to the entire virtual address space.
+- **Syntax**: LOADR \<Destination Reg.>, \<Address Reg.>
+- **Example**: LOADR W0, W1  ; W0 = memory[W1]
+- **Format**: R-Type
+- **Opcode (decimal)**: 29
+
+**STORER**:
+- **Description**: Stores the low byte of a source register to the memory address held in another register. Unlike STORE, the address is a full 32-bit register value.
+- **Syntax**: STORER \<Source Reg.>, \<Address Reg.>
+- **Example**: STORER W0, W1  ; memory[W1] = W0[7:0]
+- **Format**: R-Type
+- **Opcode (decimal)**: 30
+
 ### Processor Execution Cycle
 **FETCH**
 - **Description**: Get the next instruction from memory using the address stored in the Program Counter (PC) and load it into the Instruction Register (IR).
@@ -208,6 +222,8 @@ The processor uses exception codes to index the Exception Vector Table (EVT) and
 | **BGT**         | I-Type          | 011010        | 00000    | 16bit address   | 00000    | 
 | **UDF**         | I-Type          | 011011        | 00000    | 0000000000000000   | 00000    | 
 | **D2M**         | I-Type          | 011100        | reg     | 16bit address   | 00000    | 
+| **LOADR**       | R-Type          | 011101        | rd      | rs1 (addr reg)  | 00000    | 00000000 |
+| **STORER**      | R-Type          | 011110        | rd      | rs1 (addr reg)  | 00000    | 00000000 |
 
 
 ## References
