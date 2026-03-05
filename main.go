@@ -117,7 +117,7 @@ func main() {
 		fmt.Printf("\n===== Program %d: %s =====\n", i+1, path)
 
 		// Create a new machine for each program
-		m := machine.NewMachine(2048)
+		m := machine.NewMachine(65536)
 		m.InitDisk()
 
 		// Assemble and load this program to disk

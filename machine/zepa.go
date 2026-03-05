@@ -364,16 +364,16 @@ func NewMachine(memoryBytes int) *Machine {
 		mmu: &MMU{
 			Mode: ModeSegmented,
 			Segments: [NumSegments]Segment{
-				{Base: 0, Limit: 2048 + uint32(exceptionHandlerSize), GrowsPositive: true, Protection: Read | Execute, Priv: KernelPrivilege},
-				{Base: 2048, Limit: 2048, GrowsPositive: true, Protection: Read | Write, Priv: UserPrivilege},
-				{Base: 4096, Limit: 2048, GrowsPositive: false, Protection: Read | Write, Priv: UserPrivilege},
-				{Base: 6144, Limit: 2048, GrowsPositive: true, Protection: Read | Write, Priv: KernelPrivilege},
+				{Base: 0, Limit: 16384 + uint32(exceptionHandlerSize), GrowsPositive: true, Protection: Read | Execute, Priv: KernelPrivilege},
+				{Base: 16384, Limit: 16384, GrowsPositive: true, Protection: Read | Write, Priv: UserPrivilege},
+				{Base: 49152, Limit: 16384, GrowsPositive: false, Protection: Read | Write, Priv: UserPrivilege},
+				{Base: 32768, Limit: 16384, GrowsPositive: true, Protection: Read | Write, Priv: KernelPrivilege},
 			},
 		},
 		tlb:                NewTLB(DefaultTLBSize),
 		privMode:           KernelPrivilege, // Inicia em kernel mode
 		userMemoryLimit:    uint32(memoryBytes),
-		pageSize:           256,
+		pageSize:           4096,
 		unmappedPages:      make(map[uint32]bool),
 		writeProtectedPage: make(map[uint32]bool),
 	}
